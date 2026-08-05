@@ -2,12 +2,17 @@
 //
 // 功能：多标签页、文件读写、编辑、保存、dirty/clean 状态、另存为。
 // 文件操作通过 WorkspaceService，标签页状态通过 EditorDocument 管理。
+// 设置联动：字号取 SettingsState.editorFontSize，自动保存按设置防抖触发。
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/app_error.dart';
+import '../services/courier_service.dart';
+import '../services/settings_state.dart';
 import '../services/workspace_service.dart';
-import '../services/courier_core_service.dart';
+import 'glass.dart';
 
 class EditorPanel extends StatelessWidget {
   const EditorPanel({super.key});
@@ -16,15 +21,12 @@ class EditorPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<WorkspaceService>(
       builder: (context, ws, _) {
-        return Container(
-          color: const Color(0xFF0A0E1A),
-          child: Column(
-            children: [
-              _buildTabBar(context, ws),
-              Expanded(child: _buildEditor(context, ws)),
-              _buildStatusBar(context, ws),
-            ],
-          ),
+        return Column(
+          children: [
+            _buildTabBar(context, ws),
+            Expanded(child: _buildEditor(context, ws)),
+            _buildStatusBar(context, ws),
+          ],
         );
       },
     );
@@ -41,7 +43,7 @@ class EditorPanel extends StatelessWidget {
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.add, size: 16),
+              icon: const Icon(Icons.add, size: 17),
               color: Colors.white54,
               tooltip: '新建文件',
               onPressed: () => ws.createUntitled(),
@@ -51,7 +53,10 @@ class EditorPanel extends StatelessWidget {
             const Spacer(),
             const Padding(
               padding: EdgeInsets.only(right: 12),
-              child: Text('无打开的文件', style: TextStyle(fontSize: 11, color: Colors.white24)),
+              child: Text(
+                '无打开的文件',
+                style: TextStyle(fontSize: 13, color: Colors.white24),
+              ),
             ),
           ],
         ),
@@ -61,13 +66,13 @@ class EditorPanel extends StatelessWidget {
     return Container(
       height: 36,
       decoration: const BoxDecoration(
-        color: Color(0xFF111827),
-        border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(bottom: BorderSide(color: kGlassBorder)),
       ),
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.add, size: 16),
+            icon: const Icon(Icons.add, size: 17),
             color: Colors.white54,
             tooltip: '新建文件',
             onPressed: () => ws.createUntitled(),
@@ -85,7 +90,7 @@ class EditorPanel extends StatelessWidget {
                   doc: doc,
                   isActive: isActive,
                   onTap: () => ws.setActiveDocument(doc.id),
-                  onClose: () => ws.closeDocument(doc.id),
+                  onClose: () => unawaited(_closeDocument(context, ws, doc)),
                 );
               },
             ),
@@ -102,37 +107,27 @@ class EditorPanel extends StatelessWidget {
         onDoubleTap: () => ws.createUntitled(),
         child: MouseRegion(
           cursor: SystemMouseCursors.click,
-          child: Container(
-            width: double.infinity,
-            height: double.infinity,
-            color: const Color(0xFF0A0E1A),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.edit_note, size: 48, color: Colors.white12),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '选择文件或新建文件开始编辑',
-                    style: TextStyle(fontSize: 13, color: Colors.white24),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.edit_note, size: 48, color: Colors.white12),
+                const SizedBox(height: 8),
+                const Text(
+                  '无打开文件',
+                  style: TextStyle(fontSize: 14, color: Colors.white24),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () => ws.createUntitled(),
+                  icon: const Icon(Icons.add, size: 15),
+                  label: const Text('新建文件', style: TextStyle(fontSize: 13)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kPrimary,
+                    minimumSize: const Size(100, 32),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    '双击此处快速新建文件',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF3A3F4C)),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: () => ws.createUntitled(),
-                    icon: const Icon(Icons.add, size: 14),
-                    label: const Text('新建文件', style: TextStyle(fontSize: 12)),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF6366F1),
-                      minimumSize: const Size(100, 32),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -148,40 +143,149 @@ class EditorPanel extends StatelessWidget {
       height: 24,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: const BoxDecoration(
-        color: Color(0xFF111827),
-        border: Border(top: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(top: BorderSide(color: kGlassBorder)),
       ),
       child: Row(
         children: [
           if (doc != null) ...[
-            Text(doc.untitled ? '未命名' : 'Markdown',
-                style: const TextStyle(fontSize: 10, color: Colors.white38)),
+            Text(
+              doc.untitled ? '未命名' : 'Markdown',
+              style: const TextStyle(fontSize: 12, color: Colors.white38),
+            ),
             const SizedBox(width: 16),
             if (doc.isDirty)
               const Row(
                 children: [
                   Icon(Icons.circle, size: 6, color: Color(0xFFF59E0B)),
                   SizedBox(width: 4),
-                  Text('未保存', style: TextStyle(fontSize: 10, color: Color(0xFFF59E0B))),
+                  Text(
+                    '未保存',
+                    style: TextStyle(fontSize: 12, color: Color(0xFFF59E0B)),
+                  ),
                 ],
               )
             else
-              const Text('已保存', style: TextStyle(fontSize: 10, color: Colors.white38)),
+              const Text(
+                '已保存',
+                style: TextStyle(fontSize: 12, color: Colors.white38),
+              ),
             const SizedBox(width: 16),
-            Text('${doc.content.length} 字符',
-                style: const TextStyle(fontSize: 10, color: Colors.white38)),
+            Text(
+              '${doc.content.length} 字符',
+              style: const TextStyle(fontSize: 12, color: Colors.white38),
+            ),
           ] else
-            const Text('UTF-8', style: TextStyle(fontSize: 10, color: Colors.white38)),
+            const Text(
+              'UTF-8',
+              style: TextStyle(fontSize: 12, color: Colors.white38),
+            ),
           const Spacer(),
           Text(
             doc != null ? doc.fileName : '',
-            style: const TextStyle(fontSize: 10, color: Colors.white24),
+            style: const TextStyle(fontSize: 12, color: Colors.white24),
           ),
         ],
       ),
     );
   }
+
+  Future<void> _closeDocument(
+    BuildContext context,
+    WorkspaceService workspace,
+    EditorDocument document,
+  ) async {
+    try {
+      if (!document.isDirty) {
+        await workspace.closeDocument(document.id);
+        return;
+      }
+      final decision = await showDialog<_CloseDecision>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('未保存文档'),
+          content: Text(document.fileName),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_CloseDecision.cancel),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_CloseDecision.discard),
+              child: const Text('放弃更改'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_CloseDecision.save),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      if (!context.mounted ||
+          decision == null ||
+          decision == _CloseDecision.cancel) {
+        return;
+      }
+      if (decision == _CloseDecision.discard) {
+        await workspace.closeDocument(document.id, discardUnsaved: true);
+        return;
+      }
+      workspace.setActiveDocument(document.id);
+      if (document.untitled) {
+        final path = await _promptSavePath(context, document.fileName);
+        if (path == null) return;
+        await workspace.saveAs(document.id, path);
+      } else {
+        await workspace.saveDocument(document.id);
+      }
+      await workspace.closeDocument(document.id);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('关闭文档失败: $error')));
+    }
+  }
+
+  Future<String?> _promptSavePath(
+    BuildContext context,
+    String initialValue,
+  ) async {
+    final controller = TextEditingController(text: initialValue);
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('保存文档'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '工作区相对路径'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(controller.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
 }
+
+enum _CloseDecision { save, discard, cancel }
 
 /// _EditorTab — 单个标签页按钮。
 class _EditorTab extends StatelessWidget {
@@ -206,7 +310,7 @@ class _EditorTab extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
-              color: isActive ? const Color(0xFF6366F1) : Colors.transparent,
+              color: isActive ? kPrimary : Colors.transparent,
               width: 2,
             ),
           ),
@@ -221,7 +325,7 @@ class _EditorTab extends StatelessWidget {
             Text(
               doc.fileName,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 13,
                 color: isActive ? Colors.white : Colors.white54,
                 fontWeight: isActive ? FontWeight.w500 : FontWeight.normal,
               ),
@@ -231,7 +335,7 @@ class _EditorTab extends StatelessWidget {
               onTap: onClose,
               child: const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                child: Icon(Icons.close, size: 12, color: Colors.white38),
+                child: Icon(Icons.close, size: 13, color: Colors.white38),
               ),
             ),
           ],
@@ -242,17 +346,69 @@ class _EditorTab extends StatelessWidget {
 }
 
 /// _EditorContent — 编辑器内容区域（含工具栏）。
-class _EditorContent extends StatelessWidget {
+class _EditorContent extends StatefulWidget {
   final EditorDocument doc;
-  final TextEditingController _controller = TextEditingController();
+  const _EditorContent({required this.doc});
 
-  _EditorContent({required this.doc});
+  @override
+  State<_EditorContent> createState() => _EditorContentState();
+}
+
+class _EditorContentState extends State<_EditorContent> {
+  final TextEditingController _controller = TextEditingController();
+  bool _saving = false;
+  Timer? _autoSaveTimer;
+
+  EditorDocument get doc => widget.doc;
+
+  @override
+  void initState() {
+    super.initState();
+    _attachDocument(doc);
+  }
+
+  @override
+  void didUpdateWidget(_EditorContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.doc != widget.doc) {
+      _autoSaveTimer?.cancel();
+      _autoSaveTimer = null;
+      oldWidget.doc.removeListener(_syncFromDocument);
+      _attachDocument(doc);
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoSaveTimer?.cancel();
+    doc.removeListener(_syncFromDocument);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _attachDocument(EditorDocument document) {
+    _controller.text = document.content;
+    _controller.selection = TextSelection.collapsed(
+      offset: _controller.text.length,
+    );
+    document.addListener(_syncFromDocument);
+  }
+
+  void _syncFromDocument() {
+    if (_controller.text == doc.content) return;
+    final offset = _controller.selection.baseOffset.clamp(
+      0,
+      doc.content.length,
+    );
+    _controller.value = TextEditingValue(
+      text: doc.content,
+      selection: TextSelection.collapsed(offset: offset),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    // 同步 controller 内容
-    _controller.text = doc.content;
-    _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
+    final settings = context.watch<SettingsState>();
 
     return Column(
       children: [
@@ -261,32 +417,38 @@ class _EditorContent extends StatelessWidget {
           height: 32,
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: const BoxDecoration(
-            color: Color(0xFF0D1424),
-            border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+            color: kGlassHeaderBg,
+            border: Border(bottom: BorderSide(color: kGlassBorder)),
           ),
           child: Row(
             children: [
               _ToolButton(
                 icon: Icons.save,
                 label: '保存',
-                enabled: doc.isDirty || doc.untitled,
-                onTap: () => _save(context),
+                enabled: (doc.isDirty || doc.untitled) && !_saving,
+                onTap: () => unawaited(_save(context)),
               ),
               _ToolButton(
                 icon: Icons.send,
                 label: '创建任务',
-                enabled: doc.content.trim().isNotEmpty,
-                onTap: () => _createTask(context),
+                enabled: doc.content.trim().isNotEmpty && !_saving,
+                onTap: () => unawaited(_createTask(context)),
               ),
               const Spacer(),
               if (doc.untitled)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(kRadiusSm),
                   ),
-                  child: const Text('未命名', style: TextStyle(fontSize: 9, color: Color(0xFFF59E0B))),
+                  child: const Text(
+                    '未命名',
+                    style: TextStyle(fontSize: 11, color: Color(0xFFF59E0B)),
+                  ),
                 ),
             ],
           ),
@@ -294,144 +456,184 @@ class _EditorContent extends StatelessWidget {
         // 编辑区
         Expanded(
           child: TextField(
+            enableSuggestions: false,
+            autocorrect: false,
             controller: _controller,
             maxLines: null,
             expands: true,
-            style: const TextStyle(
+            enabled: !_saving,
+            style: TextStyle(
               fontFamily: 'Consolas',
-              fontSize: 13,
+              fontSize: settings.editorFontSize.toDouble(),
               color: Colors.white70,
               height: 1.6,
             ),
             decoration: const InputDecoration(
               contentPadding: EdgeInsets.all(16),
               border: InputBorder.none,
-              hintText: '在此输入 Markdown 内容...',
+              hintText: 'Markdown',
               hintStyle: TextStyle(color: Colors.white24),
             ),
-            onChanged: (value) => doc.updateContent(value),
+            onChanged: (value) {
+              doc.updateContent(value);
+              _scheduleAutoSave();
+            },
           ),
         ),
       ],
     );
   }
 
-  void _save(BuildContext context) async {
-    final ws = context.read<WorkspaceService>();
-    if (doc.untitled) {
-      // 弹出另存为对话框
-      final fileName = await _showSaveAsDialog(context);
-      if (fileName == null) return;
-      try {
+  /// 自动保存：开启自动保存且文档非未命名时，防抖 delay 秒后保存
+  void _scheduleAutoSave() {
+    final settings = context.read<SettingsState>();
+    if (!settings.autoSave || doc.untitled || _saving) return;
+    final scheduledDocument = doc;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(
+      Duration(seconds: settings.autoSaveDelaySeconds),
+      () {
+        if (!mounted || _saving || !identical(doc, scheduledDocument)) return;
+        final currentSettings = context.read<SettingsState>();
+        if (!currentSettings.autoSave || !scheduledDocument.isDirty) return;
+        unawaited(_save(context));
+      },
+    );
+  }
+
+  Future<void> _save(BuildContext context) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final ws = context.read<WorkspaceService>();
+      if (doc.untitled) {
+        final fileName = await _showSaveAsDialog(context);
+        if (fileName == null) return;
         await ws.saveAs(doc.id, fileName);
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已保存为 $fileName')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('已保存为 $fileName')));
         }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('保存失败: $e')),
-          );
-        }
-      }
-    } else {
-      try {
-        await ws.saveActiveDocument();
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('已保存'), duration: Duration(seconds: 1)),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('保存失败: $e')),
-          );
+      } else {
+        try {
+          await ws.saveDocument(doc.id);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('已保存'),
+                duration: Duration(seconds: 1),
+              ),
+            );
+          }
+        } on CourierException catch (error) {
+          if (error.code != 'FILE_CHANGED_EXTERNALLY') rethrow;
+          if (!context.mounted) return;
+          await _resolveExternalChange(context, ws);
         }
       }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
-  void _createTask(BuildContext context) {
-    final service = context.read<CourierCoreService?>();
-    if (service == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('核心服务未加载，无法创建任务')),
-      );
-      return;
-    }
+  Future<void> _createTask(BuildContext context) async {
+    final service = context.read<CourierService>();
     try {
-      service.createTask(
+      await service.createTask(
         title: doc.untitled ? '未命名任务' : doc.fileName,
         sourceType: doc.untitled ? 'manual' : 'plan-file',
         markdownContent: doc.content,
       );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已从 ${doc.fileName} 创建任务')),
-      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已从 ${doc.fileName} 创建任务')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('创建任务失败: $e')),
-      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('创建任务失败: $e')));
     }
   }
 
   Future<String?> _showSaveAsDialog(BuildContext context) async {
-    String fileName = doc.fileName;
-    return showDialog<String>(
+    final controller = TextEditingController(text: doc.fileName);
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('保存新文件'),
+          content: TextField(
+            autofocus: true,
+            controller: controller,
+            decoration: const InputDecoration(labelText: '工作区相对路径'),
+            onSubmitted: (value) =>
+                Navigator.of(dialogContext).pop(value.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(controller.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _resolveExternalChange(
+    BuildContext context,
+    WorkspaceService workspace,
+  ) async {
+    final decision = await showDialog<_ExternalChangeDecision>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF111827),
-              title: const Text('保存新文件', style: TextStyle(fontSize: 14, color: Colors.white)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('输入文件名，文件将创建到工作区根目录',
-                      style: TextStyle(fontSize: 11, color: Colors.white38)),
-                  const SizedBox(height: 12),
-                  TextField(
-                    autofocus: true,
-                    controller: TextEditingController(text: fileName),
-                    style: const TextStyle(fontSize: 13, color: Colors.white),
-                    decoration: const InputDecoration(
-                      hintText: '未命名.md',
-                      hintStyle: TextStyle(color: Colors.white24),
-                      enabledBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1E2438)),
-                      ),
-                      focusedBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF6366F1)),
-                      ),
-                    ),
-                    onChanged: (value) => fileName = value,
-                    onSubmitted: (value) => Navigator.pop(context, value),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, null),
-                  child: const Text('取消', style: TextStyle(color: Colors.white54)),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, fileName),
-                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF6366F1)),
-                  child: const Text('保存', style: TextStyle(fontSize: 12)),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('文件已在外部修改'),
+        content: Text(doc.fileName),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_ExternalChangeDecision.cancel),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_ExternalChangeDecision.reload),
+            child: const Text('重新加载'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(
+              dialogContext,
+            ).pop(_ExternalChangeDecision.overwrite),
+            child: const Text('覆盖'),
+          ),
+        ],
+      ),
     );
+    if (decision == _ExternalChangeDecision.reload) {
+      await workspace.reloadDocument(doc.id);
+    } else if (decision == _ExternalChangeDecision.overwrite) {
+      await workspace.saveDocument(doc.id, force: true);
+    }
   }
 }
+
+enum _ExternalChangeDecision { reload, overwrite, cancel }
 
 /// _ToolButton — 工具栏按钮。
 class _ToolButton extends StatelessWidget {
@@ -455,9 +657,19 @@ class _ToolButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           children: [
-            Icon(icon, size: 13, color: enabled ? const Color(0xFF818CF8) : Colors.white24),
+            Icon(
+              icon,
+              size: 14,
+              color: enabled ? kPrimaryLight : Colors.white24,
+            ),
             const SizedBox(width: 4),
-            Text(label, style: TextStyle(fontSize: 11, color: enabled ? Colors.white70 : Colors.white24)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                color: enabled ? Colors.white70 : Colors.white24,
+              ),
+            ),
           ],
         ),
       ),

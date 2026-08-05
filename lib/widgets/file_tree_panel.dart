@@ -7,11 +7,15 @@
 // - Markdown 文件可拖拽到右侧任务队列
 // - 排除列表管理 + 文件分类过滤
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
-import '../services/courier_core_service.dart';
+import '../services/courier_service.dart';
 import '../services/workspace_service.dart';
+import 'glass.dart';
 
 /// 自定义 MIME 类型用于拖拽传递
 const String planDropMime = 'application/vnd.courier.plan+json';
@@ -39,6 +43,8 @@ class _FileTreeContainer extends StatefulWidget {
 }
 
 class _FileTreeContainerState extends State<_FileTreeContainer> {
+  final TextEditingController _excludeController = TextEditingController();
+
   // 右键菜单状态
   Offset? _menuPosition;
   FileTreeNode? _menuTarget;
@@ -50,26 +56,74 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
   // 分类过滤面板
   bool _showFilterPanel = false;
 
+  // 展开状态（目录路径集合），提升到容器层统一管理，
+  // 配合 ListView.builder 平铺渲染，展开/收起只重建视口内的行
+  final Set<String> _expandedPaths = {};
+  bool _expandedInitialized = false;
+  String? _expandedWorkspacePath;
+
+  @override
+  void dispose() {
+    _excludeController.dispose();
+    super.dispose();
+  }
+
+  /// 展开/收起目录
+  void _toggleExpand(FileTreeNode node) {
+    setState(() {
+      if (!_expandedPaths.remove(node.path)) {
+        _expandedPaths.add(node.path);
+      }
+    });
+  }
+
+  /// 生成当前展开状态下的可见节点平铺列表。
+  /// 纯内存遍历（不构建 Widget），一次性遍历完再交给 ListView.builder 展示。
+  List<FileTreeNode> _buildVisibleNodes(WorkspaceService ws) {
+    if (_expandedWorkspacePath != ws.workspacePath) {
+      _expandedWorkspacePath = ws.workspacePath;
+      _expandedPaths.clear();
+      _expandedInitialized = false;
+    }
+    // 首次构建：顶层目录默认展开（保持原有行为）
+    if (!_expandedInitialized && ws.fileTree.isNotEmpty) {
+      _expandedInitialized = true;
+      for (final root in ws.fileTree) {
+        if (root.isDir) _expandedPaths.add(root.path);
+      }
+    }
+    final visible = <FileTreeNode>[];
+    void walk(FileTreeNode node) {
+      visible.add(node);
+      if (node.isDir && _expandedPaths.contains(node.path)) {
+        for (final child in node.children) {
+          walk(child);
+        }
+      }
+    }
+
+    for (final root in ws.fileTree) {
+      walk(root);
+    }
+    return visible;
+  }
+
   @override
   Widget build(BuildContext context) {
     final ws = widget.service;
-    return Container(
-      color: const Color(0xFF0C1220),
-      child: Stack(
-        children: [
-          Column(
-            children: [
-              _buildHeader(context, ws),
-              if (_showExcludePanel) _buildExcludePanel(context, ws),
-              if (_showFilterPanel) _buildFilterPanel(context, ws),
-              Expanded(child: _buildBody(context, ws)),
-            ],
-          ),
-          // 右键菜单
-          if (_menuPosition != null)
-            _buildContextMenu(context, ws),
-        ],
-      ),
+    return Stack(
+      children: [
+        Column(
+          children: [
+            _buildHeader(context, ws),
+            if (_showExcludePanel) _buildExcludePanel(context, ws),
+            if (_showFilterPanel) _buildFilterPanel(context, ws),
+            Expanded(child: _buildBody(context, ws)),
+          ],
+        ),
+        // 右键菜单
+        if (_menuPosition != null) _buildContextMenu(context, ws),
+      ],
     );
   }
 
@@ -78,12 +132,12 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: const BoxDecoration(
-        color: Color(0xFF111827),
-        border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(bottom: BorderSide(color: kGlassBorder)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.folder_open, size: 16, color: Color(0xFF6366F1)),
+          const Icon(Icons.folder_open, size: 17, color: kPrimary),
           const SizedBox(width: 6),
           Expanded(
             child: Column(
@@ -93,61 +147,64 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                 Text(
                   ws.hasWorkspace ? ws.workspaceName : '未打开工作区',
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                     color: Colors.white,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  ws.hasWorkspace ? ws.workspacePath : '点击右侧按钮打开文件夹',
-                  style: const TextStyle(fontSize: 10, color: Colors.white38),
+                  ws.hasWorkspace ? ws.workspacePath : '尚未选择工作区',
+                  style: const TextStyle(fontSize: 12, color: Colors.white38),
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.filter_list, size: 16),
-            color: _showFilterPanel ? const Color(0xFF6366F1) : Colors.white54,
+            icon: const Icon(Icons.filter_list, size: 17),
+            color: _showFilterPanel ? kPrimary : Colors.white54,
             tooltip: '文件过滤',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
             onPressed: ws.hasWorkspace
                 ? () => setState(() {
-                      _showFilterPanel = !_showFilterPanel;
-                      _showExcludePanel = false;
-                    })
+                    _showFilterPanel = !_showFilterPanel;
+                    _showExcludePanel = false;
+                  })
                 : null,
           ),
           IconButton(
-            icon: const Icon(Icons.block, size: 16),
-            color: _showExcludePanel ? const Color(0xFF6366F1) : Colors.white54,
+            icon: const Icon(Icons.block, size: 17),
+            color: _showExcludePanel ? kPrimary : Colors.white54,
             tooltip: '排除列表',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
             onPressed: ws.hasWorkspace
                 ? () => setState(() {
-                      _showExcludePanel = !_showExcludePanel;
-                      _showFilterPanel = false;
-                    })
+                    _showExcludePanel = !_showExcludePanel;
+                    _showFilterPanel = false;
+                  })
                 : null,
           ),
           IconButton(
-            icon: const Icon(Icons.folder_open_outlined, size: 16),
+            icon: const Icon(Icons.folder_open_outlined, size: 17),
             color: Colors.white54,
             tooltip: '打开文件夹',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-            onPressed: () => ws.pickWorkspace(),
+            onPressed: () => unawaited(_pickWorkspace(context, ws)),
           ),
           IconButton(
-            icon: const Icon(Icons.refresh, size: 16),
+            icon: const Icon(Icons.refresh, size: 17),
             color: Colors.white54,
             tooltip: '刷新文件树',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-            onPressed: ws.hasWorkspace ? () => ws.scanFileTree() : null,
+            onPressed: ws.hasWorkspace && !ws.scanning
+                ? () =>
+                      unawaited(_runAction(context, ws.scanFileTree, '刷新文件树失败'))
+                : null,
           ),
         ],
       ),
@@ -166,38 +223,51 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
             SizedBox(
               width: 20,
               height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6366F1)),
+              child: CircularProgressIndicator(strokeWidth: 2, color: kPrimary),
             ),
             SizedBox(height: 8),
-            Text('扫描文件中...', style: TextStyle(fontSize: 11, color: Colors.white38)),
+            Text(
+              '扫描文件中...',
+              style: TextStyle(fontSize: 13, color: Colors.white38),
+            ),
           ],
         ),
       );
     }
     if (ws.fileTree.isEmpty) {
       return GestureDetector(
-        onSecondaryTapDown: (details) => _showContextMenu(details, null, 'blank'),
+        onSecondaryTapDown: (details) =>
+            _showContextMenu(details, null, 'blank'),
         onDoubleTap: () => _showCreateDialog(context, 'file', null),
         child: const Center(
           child: Padding(
             padding: EdgeInsets.all(16),
             child: Text(
-              '未找到文件\n右键创建或拖入文件',
-              style: TextStyle(fontSize: 12, color: Colors.white38),
+              '工作区为空',
+              style: TextStyle(fontSize: 13, color: Colors.white38),
               textAlign: TextAlign.center,
             ),
           ),
         ),
       );
     }
+    final visibleNodes = _buildVisibleNodes(ws);
     return GestureDetector(
       onSecondaryTapDown: (details) {
         // 仅在空白区域触发
         _showContextMenu(details, null, 'blank');
       },
-      child: ListView(
+      child: ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 4),
-        children: ws.fileTree.map((n) => _FileTreeTile(node: n)).toList(),
+        itemCount: visibleNodes.length,
+        itemBuilder: (context, index) {
+          final node = visibleNodes[index];
+          return _FileTreeTile(
+            node: node,
+            isExpanded: _expandedPaths.contains(node.path),
+            onToggleExpand: () => _toggleExpand(node),
+          );
+        },
       ),
     );
   }
@@ -212,17 +282,17 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
             const Icon(Icons.folder_open, size: 32, color: Colors.white24),
             const SizedBox(height: 12),
             const Text(
-              '打开一个文件夹开始工作',
-              style: TextStyle(fontSize: 12, color: Colors.white38),
+              '未打开工作区',
+              style: TextStyle(fontSize: 13, color: Colors.white38),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: () => ws.pickWorkspace(),
-              icon: const Icon(Icons.folder_open, size: 14),
-              label: const Text('选择文件夹', style: TextStyle(fontSize: 12)),
+              onPressed: () => unawaited(_pickWorkspace(context, ws)),
+              icon: const Icon(Icons.folder_open, size: 15),
+              label: const Text('打开工作区', style: TextStyle(fontSize: 13)),
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF6366F1),
+                backgroundColor: kPrimary,
                 minimumSize: const Size(120, 32),
               ),
             ),
@@ -240,8 +310,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     return Container(
       constraints: const BoxConstraints(maxHeight: 200),
       decoration: const BoxDecoration(
-        color: Color(0xFF0D1424),
-        border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(bottom: BorderSide(color: kGlassBorder)),
       ),
       child: Column(
         children: [
@@ -249,14 +319,19 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               children: [
-                const Icon(Icons.block, size: 12, color: Color(0xFF6366F1)),
+                const Icon(Icons.block, size: 13, color: kPrimary),
                 const SizedBox(width: 4),
-                const Text('排除列表', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                const Text(
+                  '排除列表',
+                  style: TextStyle(fontSize: 13, color: Colors.white54),
+                ),
                 const Spacer(),
                 TextButton.icon(
-                  onPressed: () => ws.resetExcludePatterns(),
-                  icon: const Icon(Icons.restore, size: 12),
-                  label: const Text('重置', style: TextStyle(fontSize: 10)),
+                  onPressed: () => unawaited(
+                    _runAction(context, ws.resetExcludePatterns, '重置排除列表失败'),
+                  ),
+                  icon: const Icon(Icons.restore, size: 13),
+                  label: const Text('重置', style: TextStyle(fontSize: 12)),
                   style: TextButton.styleFrom(
                     minimumSize: const Size(50, 24),
                     padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -265,7 +340,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
               ],
             ),
           ),
-          const Divider(height: 1, color: Color(0xFF1E2438)),
+          const Divider(height: 1, color: kGlassBorder),
           Expanded(
             child: ListView.builder(
               shrinkWrap: true,
@@ -275,20 +350,23 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                 final pattern = ws.excludePatterns[index];
                 final isDefault = _defaultExcludePatterns.contains(pattern);
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 1,
+                  ),
                   child: Row(
                     children: [
                       Icon(
                         isDefault ? Icons.lock : Icons.circle,
                         size: isDefault ? 10 : 6,
-                        color: isDefault ? Colors.white24 : const Color(0xFF6366F1),
+                        color: isDefault ? Colors.white24 : kPrimary,
                       ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           pattern,
                           style: TextStyle(
-                            fontSize: 11,
+                            fontSize: 13,
                             color: isDefault ? Colors.white38 : Colors.white70,
                             fontFamily: 'Consolas',
                           ),
@@ -296,10 +374,20 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                       ),
                       if (!isDefault)
                         InkWell(
-                          onTap: () => ws.removeExcludePattern(pattern),
+                          onTap: () => unawaited(
+                            _runAction(
+                              context,
+                              () => ws.removeExcludePattern(pattern),
+                              '移除排除项失败',
+                            ),
+                          ),
                           child: const Padding(
                             padding: EdgeInsets.all(4),
-                            child: Icon(Icons.close, size: 12, color: Colors.white38),
+                            child: Icon(
+                              Icons.close,
+                              size: 13,
+                              color: Colors.white38,
+                            ),
                           ),
                         ),
                     ],
@@ -315,33 +403,39 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
               children: [
                 Expanded(
                   child: TextField(
-                    style: const TextStyle(fontSize: 11, color: Colors.white70, fontFamily: 'Consolas'),
+                    controller: _excludeController,
+                    enableSuggestions: false,
+                    autocorrect: false,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Colors.white70,
+                      fontFamily: 'Consolas',
+                    ),
                     decoration: const InputDecoration(
                       isDense: true,
-                      hintText: '添加排除项 (如 *.log)',
-                      hintStyle: TextStyle(fontSize: 10, color: Colors.white24),
+                      hintText: '排除模式',
+                      hintStyle: TextStyle(fontSize: 12, color: Colors.white24),
                       enabledBorder: UnderlineInputBorder(
                         borderSide: BorderSide(color: Color(0xFF1E2438)),
                       ),
                       focusedBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF6366F1)),
+                        borderSide: BorderSide(color: kPrimary),
                       ),
                     ),
-                    onSubmitted: (value) {
-                      if (value.trim().isNotEmpty) {
-                        ws.addExcludePattern(value.trim());
-                      }
-                    },
+                    onSubmitted: (_) =>
+                        unawaited(_addExcludePattern(context, ws)),
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.add, size: 14),
-                  color: const Color(0xFF6366F1),
-                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                  icon: const Icon(Icons.add, size: 15),
+                  color: kPrimary,
+                  constraints: const BoxConstraints(
+                    minWidth: 24,
+                    minHeight: 24,
+                  ),
                   padding: EdgeInsets.zero,
-                  onPressed: () {
-                    // 通过 controller 添加需要额外的 state，简化处理
-                  },
+                  tooltip: '添加排除模式',
+                  onPressed: () => unawaited(_addExcludePattern(context, ws)),
                 ),
               ],
             ),
@@ -357,7 +451,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
 
   Widget _buildFilterPanel(BuildContext context, WorkspaceService ws) {
     final categories = [
-      ('md', 'Markdown', const Color(0xFF6366F1), Icons.description),
+      ('md', 'Markdown', kPrimary, Icons.description),
       ('code', '代码', const Color(0xFF10B981), Icons.code),
       ('json', '配置', const Color(0xFFF59E0B), Icons.settings),
       ('image', '图片', const Color(0xFFEC4899), Icons.image),
@@ -369,27 +463,37 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: const BoxDecoration(
-        color: Color(0xFF0D1424),
-        border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(bottom: BorderSide(color: kGlassBorder)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.filter_list, size: 12, color: Color(0xFF6366F1)),
+              const Icon(Icons.filter_list, size: 13, color: kPrimary),
               const SizedBox(width: 4),
-              const Text('文件过滤', style: TextStyle(fontSize: 11, color: Colors.white54)),
+              const Text(
+                '文件过滤',
+                style: TextStyle(fontSize: 13, color: Colors.white54),
+              ),
               const Spacer(),
               InkWell(
-                onTap: () {
-                  for (final cat in categories) {
-                    ws.toggleCategoryFilter(cat.$1, true);
-                  }
-                },
+                onTap: () => unawaited(
+                  _runAction(
+                    context,
+                    () => ws.setCategoryFilters({
+                      for (final category in categories) category.$1: true,
+                    }),
+                    '更新文件过滤失败',
+                  ),
+                ),
                 child: const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: Text('全选', style: TextStyle(fontSize: 10, color: Color(0xFF6366F1))),
+                  child: Text(
+                    '全选',
+                    style: TextStyle(fontSize: 12, color: kPrimary),
+                  ),
                 ),
               ),
             ],
@@ -405,28 +509,36 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                 icon: cat.$4,
                 color: cat.$3,
                 enabled: isEnabled,
-                onTap: () => ws.toggleCategoryFilter(cat.$1, !isEnabled),
+                onTap: () => unawaited(
+                  _runAction(
+                    context,
+                    () => ws.toggleCategoryFilter(cat.$1, !isEnabled),
+                    '更新文件过滤失败',
+                  ),
+                ),
               );
             }).toList(),
           ),
           const SizedBox(height: 4),
           InkWell(
-            onTap: () => ws.toggleShowHidden(),
+            onTap: () => unawaited(
+              _runAction(context, ws.toggleShowHidden, '更新隐藏文件设置失败'),
+            ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: Row(
                 children: [
                   Icon(
                     ws.showHidden ? Icons.visibility : Icons.visibility_off,
-                    size: 12,
-                    color: ws.showHidden ? const Color(0xFF6366F1) : Colors.white38,
+                    size: 13,
+                    color: ws.showHidden ? kPrimary : Colors.white38,
                   ),
                   const SizedBox(width: 4),
                   Text(
                     ws.showHidden ? '显示隐藏文件' : '隐藏点文件',
                     style: TextStyle(
-                      fontSize: 10,
-                      color: ws.showHidden ? const Color(0xFF6366F1) : Colors.white38,
+                      fontSize: 12,
+                      color: ws.showHidden ? kPrimary : Colors.white38,
                     ),
                   ),
                 ],
@@ -438,19 +550,190 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     );
   }
 
+  Future<void> _runAction(
+    BuildContext context,
+    Future<void> Function() action,
+    String failureMessage,
+  ) async {
+    try {
+      await action();
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$failureMessage: $error')));
+    }
+  }
+
+  Future<void> _addExcludePattern(
+    BuildContext context,
+    WorkspaceService workspace,
+  ) async {
+    final pattern = _excludeController.text.trim();
+    if (pattern.isEmpty) return;
+    try {
+      await workspace.addExcludePattern(pattern);
+      _excludeController.clear();
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('添加排除项失败: $error')));
+    }
+  }
+
+  Future<void> _pickWorkspace(
+    BuildContext context,
+    WorkspaceService workspace,
+  ) async {
+    var discardUnsaved = false;
+    if (workspace.hasDirtyDocuments) {
+      final decision = await showDialog<_WorkspaceSwitchDecision>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('存在未保存文档'),
+          content: Text('共有 ${workspace.dirtyDocuments.length} 个文档尚未保存。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop(_WorkspaceSwitchDecision.cancel),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop(_WorkspaceSwitchDecision.discard),
+              child: const Text('放弃更改'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop(_WorkspaceSwitchDecision.save),
+              child: const Text('保存后切换'),
+            ),
+          ],
+        ),
+      );
+      if (!context.mounted ||
+          decision == null ||
+          decision == _WorkspaceSwitchDecision.cancel) {
+        return;
+      }
+      if (decision == _WorkspaceSwitchDecision.save) {
+        final saved = await _saveDirtyDocuments(context, workspace);
+        if (!saved || !context.mounted) return;
+      } else {
+        discardUnsaved = true;
+      }
+    }
+
+    try {
+      await workspace.pickWorkspace(discardUnsaved: discardUnsaved);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('打开工作区失败: $error')));
+    }
+  }
+
+  Future<bool> _saveDirtyDocuments(
+    BuildContext context,
+    WorkspaceService workspace,
+  ) async {
+    final documents = workspace.dirtyDocuments.toList(growable: false);
+    try {
+      for (final document in documents) {
+        workspace.setActiveDocument(document.id);
+        if (document.untitled) {
+          final relativePath = await _promptSavePath(
+            context,
+            document.fileName,
+          );
+          if (relativePath == null || !context.mounted) return false;
+          final saved = await workspace.saveAs(document.id, relativePath);
+          if (!saved) {
+            throw StateError('文档不存在或工作区不可用');
+          }
+        } else {
+          await workspace.saveDocument(document.id);
+        }
+      }
+      return true;
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存文档失败: $error')));
+      }
+      return false;
+    }
+  }
+
+  Future<String?> _promptSavePath(
+    BuildContext context,
+    String initialValue,
+  ) async {
+    final controller = TextEditingController(text: initialValue);
+    try {
+      return await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('保存文档'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            decoration: const InputDecoration(labelText: '工作区相对路径'),
+            onSubmitted: (value) =>
+                Navigator.of(dialogContext).pop(value.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(controller.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
   // ============================================================
   // 右键上下文菜单
   // ============================================================
 
-  void _showContextMenu(TapDownDetails details, FileTreeNode? target, String kind) {
+  void _showContextMenu(
+    TapDownDetails details,
+    FileTreeNode? target,
+    String kind,
+  ) {
     final overlay = MediaQuery.of(context).size;
     const menuWidth = 176.0;
     const menuHeight = 140.0;
 
+    // 全局坐标 → 容器局部坐标（容器可能不在窗口左上角，直接混用会错位）
+    var local = details.globalPosition;
+    final renderObject = context.findRenderObject();
+    if (renderObject is RenderBox) {
+      local = renderObject.globalToLocal(details.globalPosition);
+    }
+
     setState(() {
       _menuPosition = Offset(
-        details.globalPosition.dx.clamp(8.0, overlay.width - menuWidth - 8),
-        details.globalPosition.dy.clamp(8.0, overlay.height - menuHeight - 8),
+        local.dx.clamp(8.0, overlay.width - menuWidth - 8),
+        local.dy.clamp(8.0, overlay.height - menuHeight - 8),
       );
       _menuTarget = target;
       _menuKind = kind;
@@ -485,16 +768,10 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
             child: Container(
               width: 176,
               decoration: BoxDecoration(
-                color: const Color(0xFF111827),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF1E2438)),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x60000000),
-                    blurRadius: 12,
-                    offset: Offset(0, 4),
-                  ),
-                ],
+                color: kGlassFloatBg,
+                borderRadius: BorderRadius.circular(kRadiusMd),
+                border: Border.all(color: kGlassBorder),
+                boxShadow: kShadowLg,
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -511,68 +788,82 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     final items = <_MenuItem>[];
 
     // 创建文件 — blank 和 folder 可用
-    items.add(_MenuItem(
-      icon: Icons.note_add,
-      label: '创建文件',
-      enabled: _menuKind == 'blank' || _menuKind == 'folder',
-      onTap: () {
-        _closeContextMenu();
-        _showCreateDialog(context, 'file', _menuTarget);
-      },
-    ));
+    items.add(
+      _MenuItem(
+        icon: Icons.note_add,
+        label: '创建文件',
+        enabled: _menuKind == 'blank' || _menuKind == 'folder',
+        onTap: () {
+          _closeContextMenu();
+          _showCreateDialog(context, 'file', _menuTarget);
+        },
+      ),
+    );
 
     // 创建文件夹
-    items.add(_MenuItem(
-      icon: Icons.create_new_folder,
-      label: '创建文件夹',
-      enabled: _menuKind == 'blank' || _menuKind == 'folder',
-      onTap: () {
-        _closeContextMenu();
-        _showCreateDialog(context, 'folder', _menuTarget);
-      },
-    ));
+    items.add(
+      _MenuItem(
+        icon: Icons.create_new_folder,
+        label: '创建文件夹',
+        enabled: _menuKind == 'blank' || _menuKind == 'folder',
+        onTap: () {
+          _closeContextMenu();
+          _showCreateDialog(context, 'folder', _menuTarget);
+        },
+      ),
+    );
 
     // 重命名 — folder 和 file 可用
     if (_menuKind != 'blank') {
-      items.add(_MenuItem(
-        icon: Icons.edit,
-        label: '重命名',
-        enabled: true,
-        onTap: () {
-          final target = _menuTarget;
-          _closeContextMenu();
-          if (target != null) _showRenameDialog(context, target);
-        },
-      ));
+      items.add(
+        _MenuItem(
+          icon: Icons.edit,
+          label: '重命名',
+          enabled: true,
+          onTap: () {
+            final target = _menuTarget;
+            _closeContextMenu();
+            if (target != null) _showRenameDialog(context, target);
+          },
+        ),
+      );
     }
 
     // 删除 — folder 和 file 可用
     if (_menuKind != 'blank') {
-      items.add(_MenuItem(
-        icon: Icons.delete_outline,
-        label: '删除',
-        enabled: true,
-        isDanger: true,
-        onTap: () {
-          final target = _menuTarget;
-          _closeContextMenu();
-          if (target != null) _showDeleteConfirm(context, target);
-        },
-      ));
+      items.add(
+        _MenuItem(
+          icon: Icons.delete_outline,
+          label: '删除',
+          enabled: true,
+          isDanger: true,
+          onTap: () {
+            final target = _menuTarget;
+            _closeContextMenu();
+            if (target != null) {
+              unawaited(_showDeleteConfirm(context, target));
+            }
+          },
+        ),
+      );
     }
 
     // 从文件创建任务 — 仅 file 可用
     if (_menuKind == 'file' && _menuTarget != null) {
-      items.add(_MenuItem(
-        icon: Icons.add_task,
-        label: '创建任务',
-        enabled: true,
-        onTap: () {
-          final target = _menuTarget;
-          _closeContextMenu();
-          if (target != null) _createTaskFromFile(context, target);
-        },
-      ));
+      items.add(
+        _MenuItem(
+          icon: Icons.add_task,
+          label: '创建任务',
+          enabled: true,
+          onTap: () {
+            final target = _menuTarget;
+            _closeContextMenu();
+            if (target != null) {
+              unawaited(_createTaskFromFile(context, target));
+            }
+          },
+        ),
+      );
     }
 
     final widgets = <Widget>[];
@@ -580,7 +871,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       final item = items[i];
       // 分隔线
       if (i > 0 && (items[i - 1].isDanger != item.isDanger)) {
-        widgets.add(const Divider(height: 1, color: Color(0xFF1E2438)));
+        widgets.add(const Divider(height: 1, color: kGlassBorder));
       }
       widgets.add(_MenuItemWidget(item: item));
     }
@@ -591,40 +882,44 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
   // 对话框
   // ============================================================
 
-  void _showCreateDialog(BuildContext context, String type, FileTreeNode? parent) {
+  void _showCreateDialog(
+    BuildContext context,
+    String type,
+    FileTreeNode? parent,
+  ) {
     final ws = context.read<WorkspaceService>();
     String name = '';
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111827),
+        backgroundColor: kGlassFloatBg,
+        shape: kDialogShape,
         title: Text(
           type == 'file' ? '创建文件' : '创建文件夹',
-          style: const TextStyle(fontSize: 14, color: Colors.white),
+          style: const TextStyle(fontSize: 15, color: Colors.white),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              parent != null
-                  ? '在 ${parent.name} 中创建'
-                  : '在工作区根目录创建',
-              style: const TextStyle(fontSize: 11, color: Colors.white38),
+              parent != null ? '在 ${parent.name} 中创建' : '在工作区根目录创建',
+              style: const TextStyle(fontSize: 13, color: Colors.white38),
             ),
             const SizedBox(height: 12),
             TextField(
+              enableSuggestions: false,
+              autocorrect: false,
               autofocus: true,
-              style: const TextStyle(fontSize: 13, color: Colors.white),
+              style: const TextStyle(fontSize: 14, color: Colors.white),
               decoration: InputDecoration(
-                hintText: type == 'file' ? 'example.md' : 'folder-name',
-                hintStyle: const TextStyle(color: Colors.white24),
+                labelText: type == 'file' ? '文件名' : '文件夹名称',
                 enabledBorder: const UnderlineInputBorder(
                   borderSide: BorderSide(color: Color(0xFF1E2438)),
                 ),
                 focusedBorder: const UnderlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF6366F1)),
+                  borderSide: BorderSide(color: kPrimary),
                 ),
               ),
               onChanged: (value) => name = value,
@@ -642,8 +937,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF6366F1)),
-            child: const Text('创建', style: TextStyle(fontSize: 12)),
+            style: FilledButton.styleFrom(backgroundColor: kPrimary),
+            child: const Text('创建', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -662,9 +957,9 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           }
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('创建失败: $e')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('创建失败: $e')));
           }
         }
       }
@@ -678,18 +973,24 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111827),
-        title: const Text('重命名', style: TextStyle(fontSize: 14, color: Colors.white)),
+        backgroundColor: kGlassFloatBg,
+        shape: kDialogShape,
+        title: const Text(
+          '重命名',
+          style: TextStyle(fontSize: 15, color: Colors.white),
+        ),
         content: TextField(
+          enableSuggestions: false,
+          autocorrect: false,
           autofocus: true,
           controller: TextEditingController(text: node.name),
-          style: const TextStyle(fontSize: 13, color: Colors.white),
+          style: const TextStyle(fontSize: 14, color: Colors.white),
           decoration: const InputDecoration(
             enabledBorder: UnderlineInputBorder(
               borderSide: BorderSide(color: Color(0xFF1E2438)),
             ),
             focusedBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Color(0xFF6366F1)),
+              borderSide: BorderSide(color: kPrimary),
             ),
           ),
           onChanged: (value) => name = value,
@@ -705,284 +1006,379 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF6366F1)),
-            child: const Text('重命名', style: TextStyle(fontSize: 12)),
+            style: FilledButton.styleFrom(backgroundColor: kPrimary),
+            child: const Text('重命名', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
     ).then((confirmed) async {
-      if (confirmed == true && name.trim().isNotEmpty && name != node.name && context.mounted) {
+      if (confirmed == true &&
+          name.trim().isNotEmpty &&
+          name != node.name &&
+          context.mounted) {
         try {
           await ws.renameEntry(node.path, name.trim());
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('重命名失败: $e')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('重命名失败: $e')));
           }
         }
       }
     });
   }
 
-  void _showDeleteConfirm(BuildContext context, FileTreeNode node) {
+  Future<void> _showDeleteConfirm(
+    BuildContext context,
+    FileTreeNode node,
+  ) async {
     final ws = context.read<WorkspaceService>();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111827),
-        title: const Text('确认删除', style: TextStyle(fontSize: 14, color: Colors.white)),
-        content: Text(
-          '确认删除「${node.name}」？${node.isDir ? '该文件夹内的所有内容将被删除。' : ''}',
-          style: const TextStyle(fontSize: 12, color: Colors.white70),
+    try {
+      final preview = await ws.previewDeletion(node.path);
+      if (!context.mounted) return;
+      final dirtyCount = ws.dirtyDocuments.where((document) {
+        return p.equals(document.path, node.path) ||
+            p.isWithin(node.path, document.path);
+      }).length;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: kGlassFloatBg,
+          shape: kDialogShape,
+          title: const Text(
+            '移至隔离区',
+            style: TextStyle(fontSize: 15, color: Colors.white),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                preview.relativePath,
+                style: const TextStyle(fontSize: 13, color: Colors.white70),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '文件 ${preview.fileCount} 个，目录 ${preview.directoryCount} 个，'
+                '大小 ${_formatBytes(preview.totalBytes)}。',
+                style: const TextStyle(fontSize: 13, color: Colors.white54),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '内容将移动到 .Courier/trash，不会直接删除。',
+                style: TextStyle(fontSize: 13, color: Colors.white54),
+              ),
+              if (dirtyCount > 0) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '包含 $dirtyCount 个未保存文档，继续将放弃这些更改。',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFFF59E0B),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消', style: TextStyle(color: Colors.white54)),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444),
+              ),
+              child: const Text('确认移动', style: TextStyle(fontSize: 13)),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: Colors.white54)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
-            child: const Text('删除', style: TextStyle(fontSize: 12)),
-          ),
-        ],
-      ),
-    ).then((confirmed) async {
-      if (confirmed == true && context.mounted) {
-        try {
-          await ws.deleteEntry(node.path);
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('已删除 ${node.name}'), duration: const Duration(seconds: 1)),
-            );
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('删除失败: $e')),
-            );
-          }
-        }
-      }
-    });
+      );
+      if (confirmed != true || !context.mounted) return;
+      final result = await ws.deleteEntry(
+        node.path,
+        discardUnsaved: dirtyCount > 0,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已移至隔离区: ${result.originalRelativePath}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('移动失败: $error')));
+    }
   }
+}
 
-  void _createTaskFromFile(BuildContext context, FileTreeNode node) {
-    final ws = context.read<WorkspaceService>();
-    ws.openFile(node.path).then((_) {
-      final doc = ws.documents.where((d) => d.path == node.path).firstOrNull;
-      if (doc == null || !context.mounted) return;
-      final service = context.read<CourierCoreService?>();
-      if (service == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('核心服务未加载，无法创建任务')),
-        );
-        return;
-      }
-      try {
-        service.createTask(
-          title: node.name,
-          sourceType: 'plan-file',
-          markdownContent: doc.content,
-        );
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已从 ${node.name} 创建任务')),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('创建任务失败: $e')),
-          );
-        }
-      }
-    });
+enum _WorkspaceSwitchDecision { save, discard, cancel }
+
+String _formatBytes(int bytes) {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  var value = bytes.toDouble();
+  var unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  final digits = unitIndex == 0 || value >= 10 ? 0 : 1;
+  return '${value.toStringAsFixed(digits)} ${units[unitIndex]}';
+}
+
+Future<void> _createTaskFromFile(
+  BuildContext context,
+  FileTreeNode node,
+) async {
+  try {
+    final workspace = context.read<WorkspaceService>();
+    final content = await workspace.readFileContent(node.path);
+    if (!context.mounted) return;
+    await context.read<CourierService>().createTask(
+      title: node.name,
+      sourceType: 'plan-file',
+      markdownContent: content,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已从 ${node.name} 创建任务')));
+  } catch (error) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('创建任务失败: $error')));
+  }
+}
+
+Future<void> _openFile(
+  BuildContext context,
+  WorkspaceService workspace,
+  FileTreeNode node,
+) async {
+  try {
+    await workspace.openFile(node.path);
+  } catch (error) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('打开文件失败: $error')));
   }
 }
 
 /// 默认排除列表（用于判断是否可删除）
 const _defaultExcludePatterns = [
-  '.git', '.svn', '.hg', '.courier-*',
-  'node_modules', 'build', 'dist', '.dart_tool',
-  '__pycache__', '.idea', '.vscode',
-  '*.tmp', '*.temp', '*~',
-  '.DS_Store', 'Thumbs.db',
+  '.git',
+  '.svn',
+  '.hg',
+  '.courier-*',
+  'node_modules',
+  'build',
+  'dist',
+  '.dart_tool',
+  '__pycache__',
+  '.idea',
+  '.vscode',
+  '*.tmp',
+  '*.temp',
+  '*~',
+  '.DS_Store',
+  'Thumbs.db',
 ];
 
-/// _FileTreeTile — 递归文件树节点 Widget（支持拖拽和右键）。
+/// _FileTreeTile — 文件树单行节点（平铺渲染，支持拖拽和右键）。
+/// 展开状态由容器统一管理，本组件不递归子树，只渲染当前行。
 class _FileTreeTile extends StatefulWidget {
   final FileTreeNode node;
-  const _FileTreeTile({required this.node});
+  final bool isExpanded;
+  final VoidCallback onToggleExpand;
+
+  const _FileTreeTile({
+    required this.node,
+    required this.isExpanded,
+    required this.onToggleExpand,
+  });
 
   @override
   State<_FileTreeTile> createState() => _FileTreeTileState();
 }
 
 class _FileTreeTileState extends State<_FileTreeTile> {
-  bool _expanded = false;
   bool _isDragging = false;
 
   @override
-  void initState() {
-    super.initState();
-    _expanded = widget.node.level == 0 && widget.node.isDir;
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final indent = widget.node.level * 14.0 + 8;
     final ws = context.read<WorkspaceService>();
     final isActive = ws.activeDocument?.path == widget.node.path;
     final isDir = widget.node.isDir;
 
-    final tile = InkWell(
-      onTap: isDir
-          ? () => setState(() => _expanded = !_expanded)
-          : () => ws.openFile(widget.node.path),
-      onDoubleTap: isDir ? () => ws.openFile(widget.node.path) : null,
-      onSecondaryTapDown: (details) {
+    final row = _TileRow(
+      node: widget.node,
+      isDir: isDir,
+      isActive: isActive,
+      isExpanded: widget.isExpanded,
+      isDragging: _isDragging,
+      onToggleExpand: widget.onToggleExpand,
+      onOpenFile: () => unawaited(_openFile(context, ws, widget.node)),
+      onContextMenu: (details) {
         // 在文件树容器层面显示右键菜单
-        final containerState = context.findAncestorStateOfType<_FileTreeContainerState>();
+        final containerState = context
+            .findAncestorStateOfType<_FileTreeContainerState>();
         containerState?._showContextMenu(
           details,
           widget.node,
           isDir ? 'folder' : 'file',
         );
       },
-      child: Container(
-        padding: EdgeInsets.only(left: indent, right: 8),
-        height: 26,
-        color: isActive ? const Color(0xFF6366F1).withValues(alpha: 0.15) : null,
-        child: Row(
-          children: [
-            if (isDir)
-              Icon(
-                _expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                size: 14,
-                color: Colors.white54,
-              )
-            else
-              const SizedBox(width: 14),
-            const SizedBox(width: 2),
-            Icon(
-              isDir ? Icons.folder : Icons.description,
-              size: 14,
-              color: isDir
-                  ? const Color(0xFF818CF8)
-                  : (isActive ? const Color(0xFF818CF8) : Colors.white38),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
+      onCreateTask: () => unawaited(_createTaskFromFile(context, widget.node)),
+    );
+
+    // 目录：直接渲染行；文件：包拖拽支持
+    if (isDir) return row;
+
+    return Draggable<FileDragPayload>(
+      data: FileDragPayload(
+        name: widget.node.name,
+        path: widget.node.path,
+        relativePath: widget.node.relativePath,
+      ),
+      feedback: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: kPrimary,
+            borderRadius: BorderRadius.circular(kRadiusSm),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.description, size: 14, color: Colors.white),
+              const SizedBox(width: 4),
+              Text(
                 widget.node.name,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isDragging ? const Color(0xFF6366F1) : (isActive ? const Color(0xFF818CF8) : Colors.white70),
-                ),
-                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, color: Colors.white),
               ),
-            ),
-            if (!isDir)
-              InkWell(
-                onTap: () => _createTaskFromFile(context, widget.node),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: Icon(Icons.add_circle_outline, size: 13, color: Colors.white24),
+            ],
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.4, child: row),
+      onDragStarted: () => setState(() => _isDragging = true),
+      onDragEnd: (_) => setState(() => _isDragging = false),
+      onDragCompleted: () => setState(() => _isDragging = false),
+      child: row,
+    );
+  }
+}
+
+/// _TileRow — 文件树单行（独立 StatefulWidget，hover 只重建自身，
+/// 避免鼠标扫过时整棵子树反复重建导致的卡顿）。
+class _TileRow extends StatefulWidget {
+  final FileTreeNode node;
+  final bool isDir;
+  final bool isActive;
+  final bool isExpanded;
+  final bool isDragging;
+  final VoidCallback onToggleExpand;
+  final VoidCallback onOpenFile;
+  final void Function(TapDownDetails) onContextMenu;
+  final VoidCallback onCreateTask;
+
+  const _TileRow({
+    required this.node,
+    required this.isDir,
+    required this.isActive,
+    required this.isExpanded,
+    required this.isDragging,
+    required this.onToggleExpand,
+    required this.onOpenFile,
+    required this.onContextMenu,
+    required this.onCreateTask,
+  });
+
+  @override
+  State<_TileRow> createState() => _TileRowState();
+}
+
+class _TileRowState extends State<_TileRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final indent = widget.node.level * 14.0 + 8;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: InkWell(
+        onTap: widget.isDir ? widget.onToggleExpand : widget.onOpenFile,
+        onDoubleTap: widget.isDir ? widget.onOpenFile : null,
+        onSecondaryTapDown: widget.onContextMenu,
+        child: Container(
+          padding: EdgeInsets.only(left: indent, right: 8),
+          height: 28,
+          decoration: BoxDecoration(
+            color: widget.isActive
+                ? kGlassSelectedBg
+                : (_hover ? kGlassHoverBg : null),
+            borderRadius: BorderRadius.circular(kRadiusSm),
+          ),
+          child: Row(
+            children: [
+              if (widget.isDir)
+                Icon(
+                  widget.isExpanded
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_right,
+                  size: 17,
+                  color: Colors.white54,
+                )
+              else
+                const SizedBox(width: 16),
+              const SizedBox(width: 2),
+              Icon(
+                widget.isDir ? Icons.folder : Icons.description,
+                size: 16,
+                color: widget.isDir
+                    ? kPrimaryLight
+                    : (widget.isActive ? kPrimaryLight : Colors.white38),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  widget.node.name,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: widget.isDragging
+                        ? kPrimary
+                        : (widget.isActive ? kPrimaryLight : Colors.white70),
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-          ],
+              if (!widget.isDir)
+                InkWell(
+                  onTap: widget.onCreateTask,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Icon(
+                      Icons.add_circle_outline,
+                      size: 15,
+                      color: Colors.white24,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
-
-    // 所有非目录文件均可拖拽到右侧任务队列
-    if (!isDir) {
-      return Column(
-        children: [
-          Draggable<FileDragPayload>(
-            data: FileDragPayload(
-              name: widget.node.name,
-              path: widget.node.path,
-              relativePath: widget.node.relativePath,
-            ),
-            feedback: Material(
-              color: Colors.transparent,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6366F1),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.description, size: 12, color: Colors.white),
-                    const SizedBox(width: 4),
-                    Text(
-                      widget.node.name,
-                      style: const TextStyle(fontSize: 11, color: Colors.white),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            childWhenDragging: Opacity(
-              opacity: 0.4,
-              child: tile,
-            ),
-            onDragStarted: () => setState(() => _isDragging = true),
-            onDragEnd: (_) => setState(() => _isDragging = false),
-            onDragCompleted: () => setState(() => _isDragging = false),
-            child: tile,
-          ),
-          if (isDir && _expanded)
-            ...widget.node.children.map((child) => _FileTreeTile(node: child)),
-        ],
-      );
-    }
-
-    return Column(
-      children: [
-        tile,
-        if (isDir && _expanded)
-          ...widget.node.children.map((child) => _FileTreeTile(node: child)),
-      ],
-    );
-  }
-
-  void _createTaskFromFile(BuildContext context, FileTreeNode node) {
-    final ws = context.read<WorkspaceService>();
-    ws.openFile(node.path).then((_) {
-      final doc = ws.documents.where((d) => d.path == node.path).firstOrNull;
-      if (doc == null || !context.mounted) return;
-      final service = context.read<CourierCoreService?>();
-      if (service == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('核心服务未加载，无法创建任务')),
-        );
-        return;
-      }
-      try {
-        service.createTask(
-          title: node.name,
-          sourceType: 'plan-file',
-          markdownContent: doc.content,
-        );
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已从 ${node.name} 创建任务')),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('创建任务失败: $e')),
-          );
-        }
-      }
-    });
   }
 }
 
@@ -1022,23 +1418,23 @@ class _MenuItemWidget extends StatelessWidget {
           children: [
             Icon(
               item.icon,
-              size: 14,
+              size: 15,
               color: !item.enabled
                   ? Colors.white12
                   : item.isDanger
-                      ? const Color(0xFFEF4444)
-                      : Colors.white54,
+                  ? const Color(0xFFEF4444)
+                  : Colors.white54,
             ),
             const SizedBox(width: 8),
             Text(
               item.label,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 13,
                 color: !item.enabled
                     ? Colors.white12
                     : item.isDanger
-                        ? const Color(0xFFEF4444)
-                        : Colors.white70,
+                    ? const Color(0xFFEF4444)
+                    : Colors.white70,
               ),
             ),
           ],
@@ -1071,8 +1467,8 @@ class _CategoryChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
-          color: enabled ? color.withValues(alpha: 0.15) : const Color(0xFF1E2438),
-          borderRadius: BorderRadius.circular(4),
+          color: enabled ? color.withValues(alpha: 0.18) : kGlassChipBg,
+          borderRadius: BorderRadius.circular(kRadiusSm),
           border: Border.all(
             color: enabled ? color.withValues(alpha: 0.4) : Colors.transparent,
           ),
@@ -1085,7 +1481,7 @@ class _CategoryChip extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                fontSize: 10,
+                fontSize: 12,
                 color: enabled ? color : Colors.white24,
               ),
             ),

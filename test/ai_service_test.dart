@@ -1,0 +1,207 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:courier_flutter/services/ai_service.dart';
+import 'package:courier_flutter/services/app_logger.dart';
+import 'package:courier_flutter/services/models.dart';
+import 'package:courier_flutter/services/secure_storage_service.dart';
+import 'package:courier_flutter/services/settings_state.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/test_fakes.dart';
+
+void main() {
+  late Directory workspace;
+  late MemoryCredentialStore credentialStore;
+  late SecureStorageService secureStorage;
+  late SettingsState settings;
+
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    workspace = await Directory.systemTemp.createTemp('courier-ai-');
+    credentialStore = MemoryCredentialStore();
+    secureStorage = SecureStorageService(store: credentialStore);
+    settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.setAiModelId('model-under-test');
+  });
+
+  tearDown(() async {
+    settings.dispose();
+    if (await workspace.exists()) await workspace.delete(recursive: true);
+  });
+
+  test('流式消息更新会话并返回完整回复', () async {
+    final credential = generatedCredential();
+    await settings.saveApiKey(credential);
+    final provider = FakeAIProviderClient(chunks: const ['第一段', '第二段']);
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+
+    final result = await service.sendMessage('用户请求');
+    expect(result.reply, '第一段第二段');
+    expect(result.messageCount, 1);
+    expect(service.messages, hasLength(2));
+    expect(service.messages.last.text, result.reply);
+    expect(service.messages.last.streaming, isFalse);
+    expect(service.sending, isFalse);
+    expect(provider.requests.single.apiKey, credential);
+    expect(provider.requests.single.messages.single.text, '用户请求');
+  });
+
+  test('停止会话会取消进行中的请求且不会恢复旧会话', () async {
+    await settings.saveApiKey(generatedCredential());
+    final gate = Completer<void>();
+    final provider = FakeAIProviderClient(
+      chunks: const ['不会返回'],
+      release: gate,
+    );
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+
+    final pending = service.sendMessage('等待取消');
+    await provider.requestStarted.future;
+    final stopped = await service.stopSession();
+    expect(stopped?.status, 'stopped');
+    await expectLater(pending, throwsCourierCode('REQUEST_CANCELLED'));
+    expect(service.session, isNull);
+    expect(service.sending, isFalse);
+    expect(provider.cancelledRequestIds, isNotEmpty);
+  });
+
+  test('旧请求结束不会清除新请求的活动状态', () async {
+    await settings.saveApiKey(generatedCredential());
+    final firstGate = Completer<void>();
+    final secondGate = Completer<void>();
+    final provider = FakeAIProviderClient(
+      chunks: const ['新回复'],
+      release: firstGate,
+      completeReleaseOnCancel: false,
+    );
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+
+    final firstRequest = service.sendMessage('旧请求');
+    await provider.requestStarted.future;
+    await service.stopSession();
+
+    provider.release = secondGate;
+    await service.startSession(workspacePath: workspace.path);
+    final secondRequest = service.sendMessage('新请求');
+    await waitForCondition(() => provider.requests.length == 2);
+    final secondRequestId = provider.requests.last.requestId;
+
+    firstGate.complete();
+    await expectLater(firstRequest, throwsCourierCode('REQUEST_CANCELLED'));
+    expect(service.sending, isTrue);
+    expect(service.activeRequestId, secondRequestId);
+
+    secondGate.complete();
+    expect((await secondRequest).reply, '新回复');
+    expect(service.sending, isFalse);
+  });
+
+  test('任务请求在首个异步边界前即可取消', () async {
+    await settings.saveApiKey(generatedCredential());
+    final provider = FakeAIProviderClient(chunks: const ['不应返回']);
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    const requestId = 'task-request-cancel-race';
+
+    final pending = service.executeTask(
+      workspacePath: workspace.path,
+      prompt: '取消请求',
+      requestId: requestId,
+      onDelta: (_) {},
+    );
+    await service.cancelRequest(requestId);
+
+    await expectLater(pending, throwsCourierCode('REQUEST_CANCELLED'));
+    expect(provider.cancelledRequestIds, contains(requestId));
+    expect(provider.requests, isEmpty);
+  });
+
+  test('未分类 Provider 异常被转换为安全错误', () async {
+    await settings.saveApiKey(generatedCredential());
+    final provider = FakeAIProviderClient(
+      streamError: StateError('provider implementation failure'),
+    );
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+
+    await expectLater(
+      service.sendMessage('触发异常'),
+      throwsCourierCode('PROVIDER_ERROR'),
+    );
+    expect(service.messages.last.streaming, isFalse);
+    expect(service.lastError, 'AI Provider 请求失败');
+  });
+
+  test('模型刷新使用安全存储中的凭据', () async {
+    final credential = generatedCredential();
+    await settings.saveApiKey(credential);
+    final provider = FakeAIProviderClient(
+      models: const [AIModelOption(id: 'model-a', displayName: 'Model A')],
+    );
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+
+    final models = await service.refreshModels();
+    expect(models.single.id, 'model-a');
+    expect(service.options.providers.single.models.single.id, 'model-a');
+  });
+
+  test('缺少凭据时拒绝启动会话', () async {
+    final provider = FakeAIProviderClient();
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+
+    await expectLater(
+      service.startSession(workspacePath: workspace.path),
+      throwsCourierCode('AI_NOT_CONFIGURED'),
+    );
+  });
+}

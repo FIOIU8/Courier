@@ -1,115 +1,22 @@
-// models.dart — Dart 数据模型（与 Go 后端 JSON 一一对应）
-//
-// 所有模型类使用 fromJson 工厂构造，字段名与 Go 侧 json tag 完全一致。
-// 异常统一使用 CourierException（含 code 和 message getter）。
+// models.dart - Pure Dart application models.
 
-import 'dart:ffi';
+class AppVersionInfo {
+  final String version;
+  final String buildNumber;
+  final String commit;
+  final String buildTime;
 
-// ============================================================
-// FFI 基础类型
-// ============================================================
+  const AppVersionInfo({
+    required this.version,
+    required this.buildNumber,
+    required this.commit,
+    required this.buildTime,
+  });
 
-/// VersionInfo — Go 侧按值返回的版本结构体（FFI Struct）。
-/// 对应 Go: `typedef struct { int major; int minor; int patch; } VersionInfo`
-final class VersionInfo extends Struct {
-  @Int32()
-  external int major;
-
-  @Int32()
-  external int minor;
-
-  @Int32()
-  external int patch;
-
-  String get versionString => '$major.$minor.$patch';
-
-  @override
-  String toString() => 'VersionInfo($versionString)';
+  String get displayVersion =>
+      buildNumber.isEmpty ? version : '$version+$buildNumber';
 }
 
-// ============================================================
-// 异常
-// ============================================================
-
-/// CourierException — 所有 FFI 调用失败时抛出的异常。
-/// error 字段格式为 "ERROR_CODE: 描述信息"，拆分为 code 和 message。
-class CourierException implements Exception {
-  final String code;
-  final String message;
-
-  const CourierException(this.code, this.message);
-
-  /// 从 FFI 信封的 error 字段解析（格式 "CODE: message"）。
-  factory CourierException.fromErrorString(String error) {
-    final idx = error.indexOf(': ');
-    if (idx == -1) {
-      return CourierException('UNKNOWN', error);
-    }
-    return CourierException(
-      error.substring(0, idx),
-      error.substring(idx + 2),
-    );
-  }
-
-  @override
-  String toString() => 'CourierException($code): $message';
-}
-
-// ============================================================
-// FFI 信封
-// ============================================================
-
-/// FfiResult — Go 侧 ffiResult 结构体的 Dart 映射。
-/// 成功时 ok=true, data 为任意类型；失败时 ok=false, error 为错误信息。
-class FfiResult {
-  final bool ok;
-  final dynamic data;
-  final String error;
-
-  const FfiResult({required this.ok, this.data, this.error = ''});
-
-  factory FfiResult.fromJson(Map<String, dynamic> json) {
-    return FfiResult(
-      ok: json['ok'] as bool,
-      data: json['data'],
-      error: (json['error'] as String?) ?? '',
-    );
-  }
-
-  /// 将 data 当作 Map 返回，ok=false 时抛 CourierException。
-  Map<String, dynamic> dataAsMap() {
-    if (!ok) {
-      throw CourierException.fromErrorString(error);
-    }
-    return data as Map<String, dynamic>;
-  }
-
-  /// 将 data 当作 List 返回，ok=false 时抛 CourierException。
-  List<dynamic> dataAsList() {
-    if (!ok) {
-      throw CourierException.fromErrorString(error);
-    }
-    return data as List<dynamic>;
-  }
-
-  /// 将 data 当作 String 返回，ok=false 时抛 CourierException。
-  String dataAsString() {
-    if (!ok) {
-      throw CourierException.fromErrorString(error);
-    }
-    return data as String;
-  }
-
-  @override
-  String toString() => ok ? 'FfiResult(ok, data=$data)' : 'FfiResult(error=$error)';
-}
-
-// ============================================================
-// AI 模块模型
-// ============================================================
-
-/// AISession — AI 对话会话。
-/// 对应 Go: aiSession
 class AISession {
   final String sessionId;
   final String workspacePath;
@@ -127,96 +34,70 @@ class AISession {
     required this.createdAt,
   });
 
-  factory AISession.fromJson(Map<String, dynamic> json) {
+  AISession copyWith({int? messageCount}) {
     return AISession(
-      sessionId: json['sessionId'] as String,
-      workspacePath: json['workspacePath'] as String,
-      providerId: json['providerId'] as String,
-      modelId: json['modelId'] as String,
-      messageCount: (json['messageCount'] as num).toInt(),
-      createdAt: json['createdAt'] as String,
+      sessionId: sessionId,
+      workspacePath: workspacePath,
+      providerId: providerId,
+      modelId: modelId,
+      messageCount: messageCount ?? this.messageCount,
+      createdAt: createdAt,
     );
   }
-
-  @override
-  String toString() => 'AISession(id=$sessionId, provider=$providerId, model=$modelId, msgs=$messageCount)';
 }
 
-/// AISendMessageResult — 发送消息后的返回。
-/// 对应 Go: AISendMessage 的 data
-class AISendMessageResult {
-  final String sessionId;
-  final int messageCount;
-  final String reply;
+class AIMessage {
+  final String id;
+  final String role;
+  final String text;
+  final DateTime timestamp;
+  final bool streaming;
+  final String? requestId;
 
-  const AISendMessageResult({
-    required this.sessionId,
-    required this.messageCount,
-    required this.reply,
+  const AIMessage({
+    required this.id,
+    required this.role,
+    required this.text,
+    required this.timestamp,
+    this.streaming = false,
+    this.requestId,
   });
 
-  factory AISendMessageResult.fromJson(Map<String, dynamic> json) {
-    return AISendMessageResult(
-      sessionId: json['sessionId'] as String,
-      messageCount: (json['messageCount'] as num).toInt(),
-      reply: json['reply'] as String,
+  bool get isUser => role == 'user';
+
+  AIMessage copyWith({String? text, bool? streaming, String? requestId}) {
+    return AIMessage(
+      id: id,
+      role: role,
+      text: text ?? this.text,
+      timestamp: timestamp,
+      streaming: streaming ?? this.streaming,
+      requestId: requestId ?? this.requestId,
     );
   }
-
-  @override
-  String toString() => 'AISendMessageResult(sessionId=$sessionId, count=$messageCount)';
 }
 
-/// AIStopSessionResult — 停止会话的返回。
-/// 对应 Go: AIStopSession 的 data
 class AIStopSessionResult {
   final String sessionId;
   final String status;
 
-  const AIStopSessionResult({
-    required this.sessionId,
-    required this.status,
-  });
-
-  factory AIStopSessionResult.fromJson(Map<String, dynamic> json) {
-    return AIStopSessionResult(
-      sessionId: json['sessionId'] as String,
-      status: json['status'] as String,
-    );
-  }
+  const AIStopSessionResult({required this.sessionId, required this.status});
 }
 
-/// AIOptionItem — 通用键值对选项（thinkingLevels / modes）。
 class AIOptionItem {
   final String value;
   final String label;
 
   const AIOptionItem({required this.value, required this.label});
-
-  factory AIOptionItem.fromJson(Map<String, dynamic> json) {
-    return AIOptionItem(
-      value: json['value'] as String,
-      label: json['label'] as String,
-    );
-  }
 }
 
-/// AIModelOption — 单个模型选项。
 class AIModelOption {
   final String id;
   final String displayName;
 
   const AIModelOption({required this.id, required this.displayName});
-
-  factory AIModelOption.fromJson(Map<String, dynamic> json) {
-    return AIModelOption(
-      id: json['id'] as String,
-      displayName: json['displayName'] as String,
-    );
-  }
 }
 
-/// AIProviderOption — 单个供应商选项（含模型列表）。
 class AIProviderOption {
   final String id;
   final String displayName;
@@ -225,21 +106,10 @@ class AIProviderOption {
   const AIProviderOption({
     required this.id,
     required this.displayName,
-    required this.models,
+    this.models = const [],
   });
-
-  factory AIProviderOption.fromJson(Map<String, dynamic> json) {
-    return AIProviderOption(
-      id: json['id'] as String,
-      displayName: json['displayName'] as String,
-      models: (json['models'] as List<dynamic>)
-          .map((m) => AIModelOption.fromJson(m as Map<String, dynamic>))
-          .toList(),
-    );
-  }
 }
 
-/// AIGetOptionsResult — AIGetOptions 返回的完整选项集。
 class AIGetOptionsResult {
   final List<AIProviderOption> providers;
   final List<AIOptionItem> thinkingLevels;
@@ -250,212 +120,270 @@ class AIGetOptionsResult {
     required this.thinkingLevels,
     required this.modes,
   });
-
-  factory AIGetOptionsResult.fromJson(Map<String, dynamic> json) {
-    return AIGetOptionsResult(
-      providers: (json['providers'] as List<dynamic>)
-          .map((p) => AIProviderOption.fromJson(p as Map<String, dynamic>))
-          .toList(),
-      thinkingLevels: (json['thinkingLevels'] as List<dynamic>)
-          .map((t) => AIOptionItem.fromJson(t as Map<String, dynamic>))
-          .toList(),
-      modes: (json['modes'] as List<dynamic>)
-          .map((m) => AIOptionItem.fromJson(m as Map<String, dynamic>))
-          .toList(),
-    );
-  }
 }
 
-// ============================================================
-// 任务模块模型
-// ============================================================
+class AISendMessageResult {
+  final String sessionId;
+  final int messageCount;
+  final String reply;
 
-/// TaskStatus — 任务状态常量。
+  const AISendMessageResult({
+    required this.sessionId,
+    required this.messageCount,
+    required this.reply,
+  });
+}
+
 class TaskStatus {
   static const queued = 'queued';
   static const running = 'running';
-  static const done = 'done';
+  static const succeeded = 'succeeded';
   static const failed = 'failed';
+  static const cancelling = 'cancelling';
+  static const cancelled = 'cancelled';
 
-  static bool isValid(String status) {
-    return status == queued || status == running || status == done || status == failed;
-  }
+  static const values = {
+    queued,
+    running,
+    succeeded,
+    failed,
+    cancelling,
+    cancelled,
+  };
+
+  static bool isValid(String status) => values.contains(status);
+
+  static bool isTerminal(String status) =>
+      status == succeeded || status == failed || status == cancelled;
 
   TaskStatus._();
 }
 
-/// TaskItem — 单个任务。
-/// 对应 Go: taskItem
+const _unset = Object();
+
 class TaskItem {
   final String id;
   final String title;
+  final String sourceType;
   final String status;
   final String markdownContent;
+  final double progress;
   final String createdAt;
   final String updatedAt;
+  final String? startedAt;
+  final String? finishedAt;
+  final String? errorCode;
+  final String? errorMessage;
+  final int attempt;
+  final int maxAttempts;
+  final String? resultPath;
 
   const TaskItem({
     required this.id,
     required this.title,
+    required this.sourceType,
     required this.status,
     required this.markdownContent,
+    required this.progress,
     required this.createdAt,
     required this.updatedAt,
+    this.startedAt,
+    this.finishedAt,
+    this.errorCode,
+    this.errorMessage,
+    required this.attempt,
+    required this.maxAttempts,
+    this.resultPath,
   });
 
   factory TaskItem.fromJson(Map<String, dynamic> json) {
+    final status = json['status'];
+    if (status is! String || !TaskStatus.isValid(status)) {
+      throw const FormatException('Invalid task status');
+    }
     return TaskItem(
-      id: json['id'] as String,
-      title: json['title'] as String,
-      status: json['status'] as String,
-      markdownContent: json['markdownContent'] as String,
-      createdAt: json['createdAt'] as String,
-      updatedAt: json['updatedAt'] as String,
+      id: _requiredString(json, 'id'),
+      title: _requiredString(json, 'title'),
+      sourceType: _requiredString(json, 'sourceType'),
+      status: status,
+      markdownContent: _requiredString(json, 'markdownContent'),
+      progress: _requiredNumber(json, 'progress').clamp(0.0, 1.0).toDouble(),
+      createdAt: _requiredString(json, 'createdAt'),
+      updatedAt: _requiredString(json, 'updatedAt'),
+      startedAt: json['startedAt'] as String?,
+      finishedAt: json['finishedAt'] as String?,
+      errorCode: json['errorCode'] as String?,
+      errorMessage: json['errorMessage'] as String?,
+      attempt: _requiredNumber(json, 'attempt').toInt(),
+      maxAttempts: _requiredNumber(json, 'maxAttempts').toInt(),
+      resultPath: json['resultPath'] as String?,
     );
   }
 
-  @override
-  String toString() => 'TaskItem(id=$id, title=$title, status=$status)';
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'sourceType': sourceType,
+    'status': status,
+    'markdownContent': markdownContent,
+    'progress': progress,
+    'createdAt': createdAt,
+    'updatedAt': updatedAt,
+    'startedAt': startedAt,
+    'finishedAt': finishedAt,
+    'errorCode': errorCode,
+    'errorMessage': errorMessage,
+    'attempt': attempt,
+    'maxAttempts': maxAttempts,
+    'resultPath': resultPath,
+  };
+
+  TaskItem copyWith({
+    String? title,
+    String? status,
+    double? progress,
+    String? updatedAt,
+    Object? startedAt = _unset,
+    Object? finishedAt = _unset,
+    Object? errorCode = _unset,
+    Object? errorMessage = _unset,
+    int? attempt,
+    int? maxAttempts,
+    Object? resultPath = _unset,
+  }) {
+    return TaskItem(
+      id: id,
+      title: title ?? this.title,
+      sourceType: sourceType,
+      status: status ?? this.status,
+      markdownContent: markdownContent,
+      progress: (progress ?? this.progress).clamp(0.0, 1.0),
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      startedAt: identical(startedAt, _unset)
+          ? this.startedAt
+          : startedAt as String?,
+      finishedAt: identical(finishedAt, _unset)
+          ? this.finishedAt
+          : finishedAt as String?,
+      errorCode: identical(errorCode, _unset)
+          ? this.errorCode
+          : errorCode as String?,
+      errorMessage: identical(errorMessage, _unset)
+          ? this.errorMessage
+          : errorMessage as String?,
+      attempt: attempt ?? this.attempt,
+      maxAttempts: maxAttempts ?? this.maxAttempts,
+      resultPath: identical(resultPath, _unset)
+          ? this.resultPath
+          : resultPath as String?,
+    );
+  }
 }
 
-/// DeleteTaskResult — 删除任务的返回。
 class DeleteTaskResult {
   final String taskId;
   final String status;
 
   const DeleteTaskResult({required this.taskId, required this.status});
-
-  factory DeleteTaskResult.fromJson(Map<String, dynamic> json) {
-    return DeleteTaskResult(
-      taskId: json['taskId'] as String,
-      status: json['status'] as String,
-    );
-  }
 }
 
-/// QueueSummary — 队列统计。
-/// 对应 Go: GetQueueSummary 的 data
 class QueueSummary {
   final int total;
   final int queued;
   final int running;
-  final int done;
+  final int succeeded;
   final int failed;
+  final int cancelled;
 
   const QueueSummary({
     required this.total,
     required this.queued,
     required this.running,
-    required this.done,
+    required this.succeeded,
     required this.failed,
+    required this.cancelled,
   });
 
-  factory QueueSummary.fromJson(Map<String, dynamic> json) {
-    return QueueSummary(
-      total: (json['total'] as num).toInt(),
-      queued: (json['queued'] as num).toInt(),
-      running: (json['running'] as num).toInt(),
-      done: (json['done'] as num).toInt(),
-      failed: (json['failed'] as num).toInt(),
-    );
-  }
-
-  @override
-  String toString() => 'QueueSummary(total=$total, queued=$queued, running=$running, done=$done, failed=$failed)';
+  int get done => succeeded;
 }
 
-/// QueueControlResult — 队列控制（StartQueue / PauseQueue）的返回。
 class QueueControlResult {
   final String status;
 
   const QueueControlResult({required this.status});
-
-  factory QueueControlResult.fromJson(Map<String, dynamic> json) {
-    return QueueControlResult(status: json['status'] as String);
-  }
 }
 
-// ============================================================
-// Git 模块模型
-// ============================================================
-
-/// GitStatusFile — 单个文件的 Git 状态。
 class GitStatusFile {
-  final String status;
+  final String indexStatus;
+  final String workTreeStatus;
   final String path;
 
-  const GitStatusFile({required this.status, required this.path});
+  const GitStatusFile({
+    required this.indexStatus,
+    required this.workTreeStatus,
+    required this.path,
+  });
 
-  factory GitStatusFile.fromJson(Map<String, dynamic> json) {
-    return GitStatusFile(
-      status: json['status'] as String,
-      path: json['path'] as String,
-    );
-  }
+  String get status => '$indexStatus$workTreeStatus';
+  bool get staged => indexStatus.trim().isNotEmpty && indexStatus != '?';
+  bool get untracked => indexStatus == '?' && workTreeStatus == '?';
 }
 
-/// GitStatusResult — GitStatus 的返回。
 class GitStatusResult {
   final String workspacePath;
   final List<GitStatusFile> files;
   final bool clean;
+  final String currentBranch;
 
   const GitStatusResult({
     required this.workspacePath,
     required this.files,
     required this.clean,
+    required this.currentBranch,
   });
-
-  factory GitStatusResult.fromJson(Map<String, dynamic> json) {
-    return GitStatusResult(
-      workspacePath: json['workspacePath'] as String,
-      files: (json['files'] as List<dynamic>)
-          .map((f) => GitStatusFile.fromJson(f as Map<String, dynamic>))
-          .toList(),
-      clean: json['clean'] as bool,
-    );
-  }
 }
 
-/// GitCommitResult — GitCommit 的返回。
 class GitCommitResult {
   final String output;
   final String message;
 
   const GitCommitResult({required this.output, required this.message});
-
-  factory GitCommitResult.fromJson(Map<String, dynamic> json) {
-    return GitCommitResult(
-      output: json['output'] as String,
-      message: json['message'] as String,
-    );
-  }
 }
 
-/// GitDiffResult — GitDiff 的返回。
 class GitDiffResult {
   final String diff;
   final bool staged;
+  final String? path;
+  final bool truncated;
 
-  const GitDiffResult({required this.diff, required this.staged});
-
-  factory GitDiffResult.fromJson(Map<String, dynamic> json) {
-    return GitDiffResult(
-      diff: json['diff'] as String,
-      staged: json['staged'] as bool,
-    );
-  }
+  const GitDiffResult({
+    required this.diff,
+    required this.staged,
+    this.path,
+    this.truncated = false,
+  });
 }
 
-/// GitBranchListResult — GitBranchList 的返回。
 class GitBranchListResult {
   final List<String> branches;
+  final String current;
 
-  const GitBranchListResult({required this.branches});
+  const GitBranchListResult({required this.branches, required this.current});
+}
 
-  factory GitBranchListResult.fromJson(Map<String, dynamic> json) {
-    return GitBranchListResult(
-      branches: (json['branches'] as List<dynamic>).cast<String>(),
-    );
+String _requiredString(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is! String || value.isEmpty) {
+    throw FormatException('Invalid $key');
   }
+  return value;
+}
+
+num _requiredNumber(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is! num) {
+    throw FormatException('Invalid $key');
+  }
+  return value;
 }

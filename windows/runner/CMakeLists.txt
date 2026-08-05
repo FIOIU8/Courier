@@ -36,16 +36,5 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
-# TRAE sandbox workaround: direct pub cache include paths for plugin headers
-set(_PUB_CACHE "C:/Users/X/AppData/Local/Pub/Cache/hosted/pub.dev")
-set(_SRW_INC "${_PUB_CACHE}/screen_retriever_windows-0.2.2/windows/include")
-set(_WM_INC "${_PUB_CACHE}/window_manager-0.4.3/windows/include")
-if(EXISTS "${_SRW_INC}")
-  target_include_directories(${BINARY_NAME} PRIVATE "${_SRW_INC}")
-endif()
-if(EXISTS "${_WM_INC}")
-  target_include_directories(${BINARY_NAME} PRIVATE "${_WM_INC}")
-endif()
-
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)

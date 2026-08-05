@@ -1,16 +1,16 @@
-// ai_assistant_panel.dart — AI 助手面板（真实）
-//
-// 连接 CourierCoreService 的 AI 模块：
-// aiStartSession / aiSendMessage / aiStopSession / aiGetOptions
-//
-// 注意：FFI 的 AISendMessage 为同步调用（当前为占位响应）。
-// 为避免阻塞 UI，在 postFrameCallback 中执行，先显示 loading 状态。
+// ai_assistant_panel.dart - Streaming AI conversation panel.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:provider/provider.dart';
 
-import '../services/courier_core_service.dart';
+import '../services/courier_service.dart';
 import '../services/models.dart';
+import '../services/settings_state.dart';
+import 'glass.dart';
 
 class AIAssistantPanel extends StatefulWidget {
   final String workspacePath;
@@ -35,92 +35,79 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initSession());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_initializeSession());
+    });
   }
 
   @override
   void didUpdateWidget(AIAssistantPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 工作区变化时重建会话
     if (widget.workspacePath != oldWidget.workspacePath) {
-      _initSession();
+      unawaited(_initializeSession());
     }
   }
 
-  void _initSession() {
-    final service = context.read<CourierCoreService?>();
-    if (service == null || widget.workspacePath.isEmpty) return;
+  Future<void> _initializeSession() async {
+    if (!mounted) return;
+    final service = context.read<CourierService>();
+    final settings = context.read<SettingsState>();
+    if (widget.workspacePath.isEmpty || !settings.aiConfigurationReady) {
+      await service.ai.stopSession(clearMessages: true, allowMissing: true);
+      if (mounted) {
+        setState(() {
+          _sessionStarting = false;
+          _error = null;
+        });
+      }
+      return;
+    }
 
     setState(() {
       _sessionStarting = true;
       _error = null;
     });
-
-    // 加载选项（首次）
-    if (service.aiOptions == null) {
-      try {
-        service.aiGetOptions();
-      } catch (e) {
-        debugPrint('[AIAssistantPanel] 加载选项失败: $e');
-      }
+    try {
+      await service.aiStartSession(workspacePath: widget.workspacePath);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _sessionStarting = false);
     }
-
-    // 在下一帧执行，让 loading 状态先渲染
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      try {
-        // 先停止旧会话
-        if (service.aiSession != null) {
-          try {
-            service.aiStopSession();
-          } catch (_) {}
-        }
-        service.aiStartSession(workspacePath: widget.workspacePath);
-        setState(() => _sessionStarting = false);
-      } catch (e) {
-        setState(() {
-          _sessionStarting = false;
-          _error = '$e';
-        });
-      }
-    });
   }
 
-  void _sendMessage() {
-    final service = context.read<CourierCoreService?>();
-    if (service == null || service.aiSession == null || service.aiSending) return;
-
+  Future<void> _sendMessage() async {
+    final service = context.read<CourierService>();
+    if (service.aiSession == null || service.aiSending) return;
     final text = _inputController.text.trim();
     if (text.isEmpty) return;
-
     _inputController.clear();
-
-    // 在下一帧执行 FFI 同步调用，让用户消息先渲染
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      try {
-        service.aiSendMessage(text: text);
-        // 滚动到底部
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      } catch (e) {
-        setState(() => _error = '$e');
-      }
-    });
+    setState(() => _error = null);
+    try {
+      await service.aiSendMessage(text: text);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    }
+    _scrollToBottom();
   }
 
-  void _stopSession() {
-    final service = context.read<CourierCoreService?>();
-    if (service == null || service.aiSession == null) return;
+  Future<void> _cancelGeneration() async {
     try {
-      service.aiStopSession();
-      _initSession();
-    } catch (e) {
-      setState(() => _error = '$e');
+      await context.read<CourierService>().cancelAIGeneration();
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
     }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   @override
@@ -132,259 +119,191 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final service = context.watch<CourierCoreService?>();
-
-    if (service == null) {
-      return _buildNoService();
-    }
-
-    final options = service.aiOptions;
-    final noProviders = options == null || options.providers.isEmpty;
+    final service = context.watch<CourierService>();
+    final settings = context.watch<SettingsState>();
     final messages = service.aiMessages;
+    if (messages.isNotEmpty || service.aiSending) _scrollToBottom();
 
-    return Container(
-      color: const Color(0xFF0C1220),
-      child: Column(
-        children: [
-          // 供应商/模型选择栏
-          if (options != null) _buildOptionBar(context, options),
-          // 无供应商警告
-          if (noProviders)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: const BoxDecoration(
-                color: Color(0x1AF59E0B),
-                border: Border(bottom: BorderSide(color: Color(0x40F59E0B))),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning_amber, size: 12, color: Color(0xFFF59E0B)),
-                  const SizedBox(width: 6),
-                  const Expanded(
-                    child: Text('未配置 API 供应商', style: TextStyle(fontSize: 10, color: Color(0xFFFDE68A))),
+    return Column(
+      children: [
+        _buildHeader(service, settings),
+        if (!settings.aiConfigurationReady) _buildConfigurationNotice(),
+        if (_error != null) _buildErrorNotice(),
+        Expanded(
+          child: _sessionStarting
+              ? const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
-                  if (widget.onOpenSettings != null)
-                    TextButton(
-                      onPressed: widget.onOpenSettings,
-                      child: const Text('配置', style: TextStyle(fontSize: 10, color: Color(0xFF6366F1))),
-                    ),
-                ],
-              ),
-            ),
-          // 错误提示
-          if (_error != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: const BoxDecoration(
-                color: Color(0x1AEF4444),
-                border: Border(bottom: BorderSide(color: Color(0x40EF4444))),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline, size: 12, color: Color(0xFFEF4444)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(_error!, style: const TextStyle(fontSize: 10, color: Color(0xFFFCA5A5)),
-                        overflow: TextOverflow.ellipsis),
-                  ),
-                  InkWell(
-                    onTap: () => setState(() => _error = null),
-                    child: const Icon(Icons.close, size: 12, color: Color(0xFFFCA5A5)),
-                  ),
-                ],
-              ),
-            ),
-          // 消息列表
-          Expanded(child: _buildMessageList(context, messages, service.aiSending)),
-          // 输入区
-          _buildInputBar(context, service),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNoService() {
-    return Container(
-      color: const Color(0xFF0C1220),
-      child: const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.smart_toy, size: 32, color: Colors.white24),
-            SizedBox(height: 8),
-            Text('核心服务未加载', style: TextStyle(fontSize: 12, color: Colors.white38)),
-          ],
+                )
+              : _buildMessageList(messages),
         ),
-      ),
+        _buildInputBar(service, settings),
+      ],
     );
   }
 
-  Widget _buildOptionBar(BuildContext context, AIGetOptionsResult options) {
-    final service = context.read<CourierCoreService>();
+  Widget _buildHeader(CourierService service, SettingsState settings) {
     final session = service.aiSession;
-
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      height: 42,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: const BoxDecoration(
-        color: Color(0xFF111827),
-        border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(bottom: BorderSide(color: kGlassBorder)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.smart_toy, size: 14, color: Color(0xFF6366F1)),
+          const Icon(Icons.smart_toy_outlined, size: 15, color: kPrimary),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              session != null
-                  ? '会话已建立 · ${session.providerId}/${session.modelId}'
-                  : _sessionStarting
-                      ? '正在建立会话...'
-                      : '会话未建立',
-              style: TextStyle(
-                fontSize: 10,
-                color: session != null ? const Color(0xFF818CF8) : Colors.white38,
-              ),
+              session == null
+                  ? 'AI 未就绪'
+                  : '${settings.aiProviderId} · ${settings.aiModelId}',
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                color: session == null ? Colors.white38 : Colors.white70,
+              ),
             ),
           ),
-          if (session != null)
-            InkWell(
-              onTap: _stopSession,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Icon(Icons.refresh, size: 13, color: Colors.white38),
-              ),
-            ),
+          IconButton(
+            tooltip: '新建会话',
+            onPressed: settings.aiConfigurationReady && !_sessionStarting
+                ? _initializeSession
+                : null,
+            icon: const Icon(Icons.refresh, size: 15),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildMessageList(BuildContext context, List<AIMessage> messages, bool sending) {
-    if (_sessionStarting) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6366F1)),
+  Widget _buildConfigurationNotice() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: const BoxDecoration(
+        color: Color(0x1AF59E0B),
+        border: Border(bottom: BorderSide(color: Color(0x40F59E0B))),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber, size: 14, color: Color(0xFFF59E0B)),
+          const SizedBox(width: 6),
+          const Expanded(
+            child: Text(
+              '需要配置模型与 API Key',
+              style: TextStyle(fontSize: 12, color: Color(0xFFFDE68A)),
             ),
-            SizedBox(height: 8),
-            Text('正在建立 AI 会话...', style: TextStyle(fontSize: 11, color: Colors.white38)),
-          ],
-        ),
-      );
-    }
+          ),
+          TextButton(onPressed: widget.onOpenSettings, child: const Text('设置')),
+        ],
+      ),
+    );
+  }
 
+  Widget _buildErrorNotice() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: const BoxDecoration(
+        color: Color(0x1AEF4444),
+        border: Border(bottom: BorderSide(color: Color(0x40EF4444))),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, size: 14, color: Color(0xFFEF4444)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              _error!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, color: Color(0xFFFCA5A5)),
+            ),
+          ),
+          IconButton(
+            tooltip: '关闭错误提示',
+            onPressed: () => setState(() => _error = null),
+            icon: const Icon(Icons.close, size: 14),
+            constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+            padding: EdgeInsets.zero,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageList(List<AIMessage> messages) {
     if (messages.isEmpty) {
       return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.auto_awesome, size: 32, color: Colors.white24),
+            Icon(Icons.auto_awesome_outlined, size: 30, color: Colors.white24),
             SizedBox(height: 8),
-            Text('AI 助手', style: TextStyle(fontSize: 13, color: Colors.white54, fontWeight: FontWeight.w500)),
-            SizedBox(height: 4),
-            Text(
-              '输入任务，AI 将在工作区内协助工作',
-              style: TextStyle(fontSize: 11, color: Colors.white24),
-              textAlign: TextAlign.center,
-            ),
+            Text('新会话', style: TextStyle(fontSize: 13, color: Colors.white38)),
           ],
         ),
       );
     }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-      }
-    });
-
     return ListView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.all(12),
-      itemCount: messages.length + (sending ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == messages.length) {
-          return _buildThinkingIndicator();
-        }
-        return _MessageBubble(message: messages[index]);
-      },
+      padding: const EdgeInsets.all(10),
+      itemCount: messages.length,
+      itemBuilder: (context, index) => _MessageBubble(message: messages[index]),
     );
   }
 
-  Widget _buildThinkingIndicator() {
-    return const Padding(
-      padding: EdgeInsets.only(top: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6366F1)),
-          ),
-          SizedBox(width: 8),
-          Text('AI 思考中...', style: TextStyle(fontSize: 11, color: Colors.white38)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInputBar(BuildContext context, CourierCoreService service) {
-    final canSend = service.aiSession != null && !service.aiSending;
-
+  Widget _buildInputBar(CourierService service, SettingsState settings) {
+    final canSend =
+        settings.aiConfigurationReady &&
+        service.aiSession != null &&
+        !service.aiSending;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: const BoxDecoration(
-        color: Color(0xFF111827),
-        border: Border(top: BorderSide(color: Color(0xFF1E2438))),
+        color: kGlassHeaderBg,
+        border: Border(top: BorderSide(color: kGlassBorder)),
       ),
       child: Row(
         children: [
           Expanded(
-            child: Container(
-              constraints: const BoxConstraints(maxHeight: 100),
-              child: TextField(
-                controller: _inputController,
-                maxLines: null,
-                minLines: 1,
-                enabled: canSend,
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-                decoration: InputDecoration(
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  hintText: canSend ? '输入消息，Enter 发送...' : 'AI 正在处理...',
-                  hintStyle: const TextStyle(fontSize: 11, color: Colors.white24),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Color(0xFF1E2438)),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Color(0xFF6366F1)),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  disabledBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Color(0xFF1E2438)),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+            child: TextField(
+              controller: _inputController,
+              enabled: canSend,
+              minLines: 1,
+              maxLines: 4,
+              maxLength: 32000,
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
+              decoration: const InputDecoration(
+                isDense: true,
+                counterText: '',
+                hintText: '消息',
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
                 ),
-                onSubmitted: (_) => _sendMessage(),
+                border: OutlineInputBorder(),
               ),
+              onSubmitted: (_) => _sendMessage(),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           IconButton(
-            onPressed: canSend ? _sendMessage : null,
+            tooltip: service.aiSending ? '停止生成' : '发送',
+            onPressed: service.aiSending
+                ? _cancelGeneration
+                : canSend
+                ? _sendMessage
+                : null,
             icon: Icon(
-              Icons.send,
-              size: 16,
-              color: canSend ? const Color(0xFF6366F1) : Colors.white24,
-            ),
-            style: IconButton.styleFrom(
-              backgroundColor: canSend ? const Color(0xFF6366F1).withValues(alpha: 0.1) : null,
+              service.aiSending ? Icons.stop_circle_outlined : Icons.send,
+              size: 18,
+              color: service.aiSending || canSend ? kPrimary : Colors.white24,
             ),
           ),
         ],
@@ -393,56 +312,94 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
   }
 }
 
-/// _MessageBubble — 单条消息气泡。
 class _MessageBubble extends StatelessWidget {
   final AIMessage message;
+
   const _MessageBubble({required this.message});
 
   @override
   Widget build(BuildContext context) {
     final isUser = message.isUser;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Row(
-        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isUser) ...[
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: const Color(0xFF6366F1).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Icon(Icons.smart_toy, size: 13, color: Color(0xFF6366F1)),
+            const Padding(
+              padding: EdgeInsets.only(top: 5),
+              child: Icon(Icons.smart_toy_outlined, size: 15, color: kPrimary),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 7),
           ],
           Flexible(
             child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.75,
-              ),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: isUser
-                    ? const Color(0xFF6366F1)
-                    : const Color(0xFF1E2438),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(8),
-                  topRight: const Radius.circular(8),
-                  bottomLeft: isUser ? const Radius.circular(8) : Radius.zero,
-                  bottomRight: isUser ? Radius.zero : const Radius.circular(8),
-                ),
+                color: isUser ? kPrimary : const Color(0xE61E2438),
+                borderRadius: BorderRadius.circular(kRadiusMd),
+                border: isUser ? null : Border.all(color: kGlassBorder),
               ),
-              child: SelectableText(
-                message.text,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: isUser ? Colors.white : Colors.white70,
-                  height: 1.5,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isUser)
+                    SelectableText(
+                      message.text,
+                      style: const TextStyle(fontSize: 13, height: 1.45),
+                    )
+                  else
+                    MarkdownBody(
+                      data: message.text.isEmpty ? ' ' : message.text,
+                      selectable: true,
+                      styleSheet: MarkdownStyleSheet(
+                        p: const TextStyle(
+                          fontSize: 13,
+                          height: 1.5,
+                          color: Colors.white70,
+                        ),
+                        code: const TextStyle(
+                          fontSize: 12,
+                          height: 1.45,
+                          fontFamily: 'Consolas',
+                          color: Color(0xFFE5E7EB),
+                        ),
+                        codeblockDecoration: BoxDecoration(
+                          color: const Color(0xFF111317),
+                          borderRadius: BorderRadius.circular(kRadiusSm),
+                          border: Border.all(color: kGlassBorder),
+                        ),
+                      ),
+                    ),
+                  if (!isUser && message.text.isNotEmpty)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: IconButton(
+                        tooltip: '复制回复',
+                        onPressed: () => Clipboard.setData(
+                          ClipboardData(text: message.text),
+                        ),
+                        icon: const Icon(Icons.copy, size: 13),
+                        constraints: const BoxConstraints.tightFor(
+                          width: 26,
+                          height: 24,
+                        ),
+                        padding: EdgeInsets.zero,
+                      ),
+                    ),
+                  if (message.streaming)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 1.4),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),

@@ -55,37 +55,57 @@ add_subdirectory("runner")
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
-# NOTE: TRAE sandbox workaround - use direct pub cache paths instead of symlinks
-set(PLUGIN_PUB_CACHE_DIR "C:/Users/X/AppData/Local/Pub/Cache/hosted/pub.dev")
-set(PLUGIN_BUNDLED_LIBRARIES)
+# Flutter creates links from this directory into the Pub cache. Some managed
+# Windows environments reject cross-volume link traversal, so resolve link
+# targets while configuring without committing machine paths or package versions.
+set(_FLUTTER_PLUGINS_FILE "${FLUTTER_MANAGED_DIR}/generated_plugins.cmake")
+file(READ "${_FLUTTER_PLUGINS_FILE}" _FLUTTER_PLUGINS_CONTENT)
+file(GLOB _FLUTTER_PLUGIN_LINKS LIST_DIRECTORIES true CONFIGURE_DEPENDS
+  "${FLUTTER_MANAGED_DIR}/ephemeral/.plugin_symlinks/*")
+set(_FLUTTER_PLUGIN_TARGETS "")
 
-# screen_retriever_windows (hardcoded version to avoid GLOB issues in TRAE sandbox)
-set(_SRW_DIR "${PLUGIN_PUB_CACHE_DIR}/screen_retriever_windows-0.2.2")
-message(STATUS "Checking screen_retriever_windows at: ${_SRW_DIR}/windows/CMakeLists.txt")
-message(STATUS "EXISTS check: ${EXISTS_${_SRW_DIR}/windows/CMakeLists.txt}")
-if(EXISTS "${_SRW_DIR}/windows/CMakeLists.txt")
-  message(STATUS "screen_retriever_windows FOUND")
-  add_subdirectory(${_SRW_DIR}/windows plugins/screen_retriever_windows)
-  target_link_libraries(${BINARY_NAME} PRIVATE screen_retriever_windows_plugin)
-  target_include_directories(${BINARY_NAME} PRIVATE "${_SRW_DIR}/windows/include")
-  list(APPEND PLUGIN_BUNDLED_LIBRARIES $<TARGET_FILE:screen_retriever_windows_plugin>)
-else()
-  message(STATUS "screen_retriever_windows NOT FOUND - path does not exist")
-endif()
+foreach(_FLUTTER_PLUGIN_LINK IN LISTS _FLUTTER_PLUGIN_LINKS)
+  if(IS_SYMLINK "${_FLUTTER_PLUGIN_LINK}")
+    file(READ_SYMLINK "${_FLUTTER_PLUGIN_LINK}" _FLUTTER_PLUGIN_TARGET)
+    string(FIND "${_FLUTTER_PLUGIN_TARGET}" ":" _DRIVE_SEPARATOR)
+    if(_DRIVE_SEPARATOR GREATER 0)
+      math(EXPR _DRIVE_START "${_DRIVE_SEPARATOR} - 1")
+      string(SUBSTRING "${_FLUTTER_PLUGIN_TARGET}" ${_DRIVE_START} -1
+        _FLUTTER_PLUGIN_TARGET)
+    elseif(NOT IS_ABSOLUTE "${_FLUTTER_PLUGIN_TARGET}")
+      get_filename_component(_FLUTTER_PLUGIN_LINK_DIR
+        "${_FLUTTER_PLUGIN_LINK}" DIRECTORY)
+      get_filename_component(_FLUTTER_PLUGIN_TARGET
+        "${_FLUTTER_PLUGIN_LINK_DIR}/${_FLUTTER_PLUGIN_TARGET}" ABSOLUTE)
+    endif()
+    file(TO_CMAKE_PATH "${_FLUTTER_PLUGIN_TARGET}" _FLUTTER_PLUGIN_TARGET)
+    if(NOT EXISTS "${_FLUTTER_PLUGIN_TARGET}")
+      message(FATAL_ERROR "Flutter plugin target does not exist")
+    endif()
+    get_filename_component(_FLUTTER_PLUGIN_NAME
+      "${_FLUTTER_PLUGIN_LINK}" NAME)
+    string(APPEND _FLUTTER_PLUGIN_TARGETS
+      "set(_FLUTTER_PLUGIN_TARGET_${_FLUTTER_PLUGIN_NAME} \"${_FLUTTER_PLUGIN_TARGET}\")\n")
+  endif()
+endforeach()
 
-# window_manager (hardcoded version)
-set(_WM_DIR "${PLUGIN_PUB_CACHE_DIR}/window_manager-0.4.3")
-message(STATUS "Checking window_manager at: ${_WM_DIR}/windows/CMakeLists.txt")
-if(EXISTS "${_WM_DIR}/windows/CMakeLists.txt")
-  message(STATUS "window_manager FOUND")
-  add_subdirectory(${_WM_DIR}/windows plugins/window_manager)
-  target_link_libraries(${BINARY_NAME} PRIVATE window_manager_plugin)
-  target_include_directories(${BINARY_NAME} PRIVATE "${_WM_DIR}/windows/include")
-  list(APPEND PLUGIN_BUNDLED_LIBRARIES $<TARGET_FILE:window_manager_plugin>)
-else()
-  message(STATUS "window_manager NOT FOUND - path does not exist")
-endif()
+string(REPLACE
+  [=[flutter/ephemeral/.plugin_symlinks/${plugin}]=]
+  [=[${_FLUTTER_PLUGIN_TARGET_${plugin}}]=]
+  _FLUTTER_PLUGINS_CONTENT
+  "${_FLUTTER_PLUGINS_CONTENT}")
+string(REPLACE
+  [=[flutter/ephemeral/.plugin_symlinks/${ffi_plugin}]=]
+  [=[${_FLUTTER_PLUGIN_TARGET_${ffi_plugin}}]=]
+  _FLUTTER_PLUGINS_CONTENT
+  "${_FLUTTER_PLUGINS_CONTENT}")
+string(PREPEND _FLUTTER_PLUGINS_CONTENT "${_FLUTTER_PLUGIN_TARGETS}\n")
 
+set(_RESOLVED_FLUTTER_PLUGINS_FILE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated_plugins_resolved.cmake")
+file(WRITE "${_RESOLVED_FLUTTER_PLUGINS_FILE}"
+  "${_FLUTTER_PLUGINS_CONTENT}")
+include("${_RESOLVED_FLUTTER_PLUGINS_FILE}")
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

@@ -56,6 +56,10 @@ dist/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+*.lnk
+
+# Courier workspace-local state
+.Courier/
 
 # Reasonix agent runtime metadata
 .reasonix/

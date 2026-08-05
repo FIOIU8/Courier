@@ -1,22 +1,18 @@
-// workspace_service.dart — 工作区与文件系统服务（ChangeNotifier）
-//
-// 管理：工作区目录选择、Markdown 文件树扫描、文件读写、标签页状态。
-// 所有文件系统操作通过 dart:io 直接访问（桌面端拥有完整文件系统权限）。
-// 工作区路径通过 shared_preferences 持久化。
-// 排除列表通过 shared_preferences 持久化，支持用户自定义。
+// workspace_service.dart - Safe workspace, file tree, and editor state.
 
+import 'dart:async';
 import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ============================================================
-// 数据模型
-// ============================================================
+import 'app_error.dart';
+import 'app_logger.dart';
+import 'safe_file_system.dart';
+import 'workspace_config_service.dart';
 
-/// FileTreeNode — 文件树节点（目录或文件）。
 class FileTreeNode {
   final String name;
   final String path;
@@ -35,7 +31,6 @@ class FileTreeNode {
   });
 }
 
-/// EditorDocument — 编辑器中的单个文档标签页。
 class EditorDocument extends ChangeNotifier {
   String id;
   String path;
@@ -45,6 +40,7 @@ class EditorDocument extends ChangeNotifier {
   String savedContent;
   bool untitled;
   bool external;
+  FileFingerprint? fingerprint;
 
   EditorDocument({
     required this.id,
@@ -55,22 +51,33 @@ class EditorDocument extends ChangeNotifier {
     required this.savedContent,
     this.untitled = false,
     this.external = false,
+    this.fingerprint,
   });
 
   bool get isDirty => content != savedContent;
 
   void updateContent(String newContent) {
+    if (content == newContent) return;
     content = newContent;
     notifyListeners();
   }
 
-  void markSaved() {
+  void markSaved(FileFingerprint newFingerprint) {
     savedContent = content;
+    fingerprint = newFingerprint;
+    external = false;
+    notifyListeners();
+  }
+
+  void replaceFromDisk(SafeTextFile file) {
+    content = file.content;
+    savedContent = file.content;
+    fingerprint = file.fingerprint;
+    external = false;
     notifyListeners();
   }
 }
 
-/// 拖拽载荷 — 文件树节点拖拽时传递的数据。
 class FileDragPayload {
   final String name;
   final String path;
@@ -83,48 +90,32 @@ class FileDragPayload {
   });
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'path': path,
-        'relativePath': relativePath,
-      };
+    'name': name,
+    'path': path,
+    'relativePath': relativePath,
+  };
 
   static FileDragPayload? fromJson(Map<String, dynamic>? json) {
     if (json == null) return null;
     final name = json['name'];
     final path = json['path'];
     final relativePath = json['relativePath'];
-    if (name is! String || path is! String || relativePath is! String) return null;
+    if (name is! String || path is! String || relativePath is! String) {
+      return null;
+    }
     return FileDragPayload(name: name, path: path, relativePath: relativePath);
   }
 }
 
-// ============================================================
-// WorkspaceService — 工作区服务
-// ============================================================
-
-/// 默认排除列表
-const _defaultExcludes = [
-  '.git',
-  '.svn',
-  '.hg',
-  '.courier-*',
-  'node_modules',
-  'build',
-  'dist',
-  '.dart_tool',
-  '__pycache__',
-  '.idea',
-  '.vscode',
-  '*.tmp',
-  '*.temp',
-  '*~',
-  '.DS_Store',
-  'Thumbs.db',
-];
-
 class WorkspaceService extends ChangeNotifier {
-  static const _prefKey = 'workspace_path';
-  static const _excludeKey = 'workspace_excludes';
+  static const String _workspacePreferenceKey = 'workspace_path';
+  static const String _legacyExcludeKey = 'workspace_excludes';
+  static const int _maxTreeDepth = 12;
+
+  final SafeFileSystem fileSystem;
+  final WorkspaceConfigService configService;
+  final AppLogger logger;
+  final Future<void> Function(String workspacePath)? onWorkspaceOpened;
 
   String _workspacePath = '';
   String _workspaceName = '';
@@ -133,25 +124,19 @@ class WorkspaceService extends ChangeNotifier {
   String? _activeDocumentId;
   int _untitledCounter = 0;
   bool _scanning = false;
-
-  /// 排除列表（用户可自定义）
-  List<String> _excludePatterns = List.from(_defaultExcludes);
-
-  /// 是否显示隐藏文件（以 . 开头的文件）
+  String? _lastError;
+  List<String> _excludePatterns = List.from(defaultWorkspaceExcludes);
   bool _showHidden = false;
+  final Map<String, bool> _categoryFilter = Map<String, bool>.from(
+    defaultFileFilters,
+  );
 
-  /// 文件分类过滤开关
-  final Map<String, bool> _categoryFilter = {
-    'md': true,
-    'code': true,
-    'json': true,
-    'image': true,
-    'archive': true,
-    'audio': true,
-    'video': true,
-    'text': true,
-    'other': true,
-  };
+  WorkspaceService({
+    required this.fileSystem,
+    required this.configService,
+    required this.logger,
+    this.onWorkspaceOpened,
+  });
 
   String get workspacePath => _workspacePath;
   String get workspaceName => _workspaceName;
@@ -160,380 +145,377 @@ class WorkspaceService extends ChangeNotifier {
   String? get activeDocumentId => _activeDocumentId;
   bool get hasWorkspace => _workspacePath.isNotEmpty;
   bool get scanning => _scanning;
+  String? get lastError => _lastError;
   List<String> get excludePatterns => List.unmodifiable(_excludePatterns);
   bool get showHidden => _showHidden;
   Map<String, bool> get categoryFilter => Map.unmodifiable(_categoryFilter);
+  bool get hasDirtyDocuments => _documents.any((document) => document.isDirty);
+  List<EditorDocument> get dirtyDocuments =>
+      _documents.where((document) => document.isDirty).toList(growable: false);
+  int get visibleFileCount => _countFiles(_fileTree);
 
   EditorDocument? get activeDocument {
     if (_activeDocumentId == null) return null;
-    return _documents.where((d) => d.id == _activeDocumentId).firstOrNull;
+    return _documents
+        .where((document) => document.id == _activeDocumentId)
+        .firstOrNull;
   }
 
-  /// 从持久化存储加载上次的工作区路径。
   Future<void> loadLastWorkspace() async {
-    final prefs = await SharedPreferences.getInstance();
-    final path = prefs.getString(_prefKey);
-    // 加载排除列表
-    final excludes = prefs.getStringList(_excludeKey);
-    if (excludes != null && excludes.isNotEmpty) {
-      _excludePatterns = excludes;
-    }
-    if (path != null && path.isNotEmpty && Directory(path).existsSync()) {
-      await openWorkspace(path, persist: false);
+    final preferences = await SharedPreferences.getInstance();
+    final path = preferences.getString(_workspacePreferenceKey);
+    if (path == null || path.isEmpty || !await Directory(path).exists()) return;
+    final legacyExcludes = preferences.getStringList(_legacyExcludeKey);
+    await openWorkspace(path, persist: false, legacyExcludes: legacyExcludes);
+    if (legacyExcludes != null && legacyExcludes.isNotEmpty) {
+      final removed = await preferences.remove(_legacyExcludeKey);
+      if (!removed) {
+        await logger.warn(
+          'workspace',
+          'legacy_preferences_cleanup_failed',
+          '旧版工作区排除设置未能清理',
+        );
+      }
     }
   }
 
-  /// 通过文件选择器选取工作区目录。
-  Future<void> pickWorkspace() async {
-    final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: '选择工作区文件夹',
-    );
+  Future<void> pickWorkspace({bool discardUnsaved = false}) async {
+    final result = await getDirectoryPath(confirmButtonText: '选择工作区');
     if (result == null || result.isEmpty) return;
-    await openWorkspace(result);
+    await openWorkspace(result, discardUnsaved: discardUnsaved);
   }
 
-  /// 打开指定路径的工作区。
-  Future<void> openWorkspace(String path, {bool persist = true}) async {
-    final dir = Directory(path);
-    if (!dir.existsSync()) {
-      debugPrint('[WorkspaceService] 目录不存在: $path');
-      return;
+  Future<void> openWorkspace(
+    String path, {
+    bool persist = true,
+    bool discardUnsaved = false,
+    List<String>? legacyExcludes,
+  }) async {
+    if (hasDirtyDocuments && !discardUnsaved) {
+      throw const CourierException(
+        'UNSAVED_CHANGES',
+        '存在未保存文档，切换工作区前需要保存或放弃更改',
+      );
     }
 
-    // 关闭所有已打开的文档
-    for (final doc in _documents) {
-      doc.dispose();
-    }
-    _documents.clear();
-    _activeDocumentId = null;
+    final previousRoot = _workspacePath;
+    final safeRoot = await fileSystem.resolveWorkspace(path);
+    late WorkspacePreferences preferences;
+    try {
+      preferences = await configService.bindWorkspace(safeRoot);
+      if (legacyExcludes != null &&
+          legacyExcludes.isNotEmpty &&
+          !configService.readOnly &&
+          listEquals(preferences.excludePatterns, defaultWorkspaceExcludes)) {
+        final migrated = _sanitizeExcludePatterns(legacyExcludes);
+        preferences = preferences.copyWith(excludePatterns: migrated);
+        await configService.save(preferences);
+      }
 
-    _workspacePath = path;
-    _workspaceName = p.basename(path);
+      await onWorkspaceOpened?.call(safeRoot);
+      await fileSystem.bindWorkspace(safeRoot);
+      if (persist) {
+        final globalPreferences = await SharedPreferences.getInstance();
+        final written = await globalPreferences.setString(
+          _workspacePreferenceKey,
+          safeRoot,
+        );
+        if (!written) {
+          throw const CourierException(
+            'PREFERENCES_WRITE_FAILED',
+            '无法记录最近使用的工作区',
+          );
+        }
+      }
+    } catch (error, stackTrace) {
+      if (previousRoot.isNotEmpty) {
+        try {
+          await configService.bindWorkspace(previousRoot);
+          await onWorkspaceOpened?.call(previousRoot);
+          await fileSystem.bindWorkspace(previousRoot);
+        } catch (_) {
+          await logger.error(
+            'workspace',
+            'rollback_failed',
+            '工作区切换失败后无法恢复原服务状态',
+            errorCode: 'WORKSPACE_ROLLBACK_FAILED',
+          );
+          throw const CourierException(
+            'WORKSPACE_ROLLBACK_FAILED',
+            '工作区切换失败，且原工作区服务状态无法恢复',
+          );
+        }
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+
+    await _closeAllDocuments(discardUnsaved: true);
+    _workspacePath = safeRoot;
+    _workspaceName = p.basename(safeRoot);
+    _excludePatterns = List<String>.from(preferences.excludePatterns);
+    _showHidden = preferences.showHiddenFiles;
+    _categoryFilter
+      ..clear()
+      ..addAll(preferences.fileFilters);
+    _lastError = null;
     notifyListeners();
 
     await scanFileTree();
 
-    if (persist) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_prefKey, path);
-    }
+    await logger.info('workspace', 'opened', '工作区已打开');
   }
 
-  // ============================================================
-  // 排除列表管理
-  // ============================================================
-
-  /// 更新排除列表
   Future<void> setExcludePatterns(List<String> patterns) async {
-    _excludePatterns = patterns;
+    _requireWorkspace();
+    final sanitized = _sanitizeExcludePatterns(patterns);
+    await _saveWorkspacePreferences(excludePatterns: sanitized);
+    _excludePatterns = sanitized;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_excludeKey, patterns);
-    if (_workspacePath.isNotEmpty) {
-      await scanFileTree();
-    }
+    await scanFileTree();
   }
 
-  /// 添加排除项
   Future<void> addExcludePattern(String pattern) async {
-    if (pattern.trim().isEmpty || _excludePatterns.contains(pattern)) return;
-    _excludePatterns = [..._excludePatterns, pattern.trim()];
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_excludeKey, _excludePatterns);
-    notifyListeners();
-    if (_workspacePath.isNotEmpty) await scanFileTree();
+    final value = _sanitizeExcludePattern(pattern);
+    if (_excludePatterns.contains(value)) return;
+    await setExcludePatterns([..._excludePatterns, value]);
   }
 
-  /// 移除排除项
   Future<void> removeExcludePattern(String pattern) async {
-    _excludePatterns = _excludePatterns.where((p) => p != pattern).toList();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_excludeKey, _excludePatterns);
-    notifyListeners();
-    if (_workspacePath.isNotEmpty) await scanFileTree();
+    await setExcludePatterns(
+      _excludePatterns.where((item) => item != pattern).toList(growable: false),
+    );
   }
 
-  /// 重置排除列表为默认值
   Future<void> resetExcludePatterns() async {
-    _excludePatterns = List.from(_defaultExcludes);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_excludeKey, _excludePatterns);
-    notifyListeners();
-    if (_workspacePath.isNotEmpty) await scanFileTree();
+    await setExcludePatterns(defaultWorkspaceExcludes);
   }
 
-  /// 切换显示/隐藏隐藏文件
-  void toggleShowHidden() {
-    _showHidden = !_showHidden;
-    notifyListeners();
-    if (_workspacePath.isNotEmpty) scanFileTree();
+  Future<void> toggleShowHidden() async {
+    await setShowHidden(!_showHidden);
   }
 
-  /// 切换文件分类过滤
-  void toggleCategoryFilter(String category, bool value) {
-    _categoryFilter[category] = value;
+  Future<void> setShowHidden(bool value) async {
+    if (_showHidden == value) return;
+    await _saveWorkspacePreferences(showHidden: value);
+    _showHidden = value;
     notifyListeners();
-    if (_workspacePath.isNotEmpty) scanFileTree();
+    await scanFileTree();
   }
 
-  /// 判断名称是否被排除列表过滤
-  bool _isExcluded(String name) {
-    final lowerName = name.toLowerCase();
-    for (final pattern in _excludePatterns) {
-      final lowerPattern = pattern.toLowerCase();
-      if (lowerPattern.contains('*')) {
-        // 通配符匹配
-        if (_matchGlob(lowerName, lowerPattern)) return true;
-      } else if (lowerName == lowerPattern) {
-        return true;
-      } else if (lowerPattern.endsWith('-*') &&
-          lowerName.startsWith(lowerPattern.substring(0, lowerPattern.length - 1))) {
-        return true;
-      }
+  Future<void> toggleCategoryFilter(String category, bool value) async {
+    await setCategoryFilters({category: value});
+  }
+
+  Future<void> setCategoryFilters(Map<String, bool> values) async {
+    if (values.keys.any((category) => !_categoryFilter.containsKey(category))) {
+      throw const CourierException('INVALID_FILTER', '文件分类过滤器无效');
     }
-    // 隐藏文件
-    if (!_showHidden && name.startsWith('.')) return true;
-    return false;
+    final filters = Map<String, bool>.from(_categoryFilter)..addAll(values);
+    await _saveWorkspacePreferences(categoryFilter: filters);
+    _categoryFilter
+      ..clear()
+      ..addAll(filters);
+    notifyListeners();
+    await scanFileTree();
   }
 
-  /// 简单的 glob 匹配
-  bool _matchGlob(String name, String pattern) {
-    // 将 glob 模式转为正则
-    final regexPattern = pattern
-        .replaceAll('.', r'\.')
-        .replaceAll('*', '.*')
-        .replaceAll('?', '.');
-    try {
-      return RegExp('^$regexPattern\$').hasMatch(name);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// 文件分类
-  String _classifyFile(String name) {
-    final ext = p.extension(name).toLowerCase();
-    if ({'.md', '.markdown'}.contains(ext)) return 'md';
-    if ({'.dart', '.go', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.rs', '.rb', '.kt', '.swift'}.contains(ext)) return 'code';
-    if ({'.json', '.yaml', '.yml', '.toml', '.xml'}.contains(ext)) return 'json';
-    if ({'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.bmp'}.contains(ext)) return 'image';
-    if ({'.zip', '.tar', '.gz', '.rar', '.7z'}.contains(ext)) return 'archive';
-    if ({'.mp3', '.wav', '.flac', '.aac', '.ogg'}.contains(ext)) return 'audio';
-    if ({'.mp4', '.avi', '.mkv', '.mov', '.webm'}.contains(ext)) return 'video';
-    if ({'.txt', '.log', '.csv', '.ini', '.cfg'}.contains(ext)) return 'text';
-    return 'other';
-  }
-
-  /// 扫描工作区中的 Markdown 文件，构建文件树。
   Future<void> scanFileTree() async {
-    if (_workspacePath.isEmpty) return;
+    if (_workspacePath.isEmpty || _scanning) return;
     _scanning = true;
+    _lastError = null;
     notifyListeners();
-
     try {
       _fileTree = await _scanDirectory(_workspacePath, 0);
-    } catch (e) {
-      debugPrint('[WorkspaceService] 扫描文件树失败: $e');
+    } on CourierException catch (error) {
+      _lastError = error.message;
+      await logger.error(
+        'workspace',
+        'scan_failed',
+        error.message,
+        errorCode: error.code,
+      );
+      rethrow;
+    } catch (_) {
+      _lastError = '文件树扫描失败';
+      await logger.error(
+        'workspace',
+        'scan_failed',
+        '文件树扫描期间发生未分类错误',
+        errorCode: 'WORKSPACE_SCAN_FAILED',
+      );
+      throw const CourierException('WORKSPACE_SCAN_FAILED', '文件树扫描失败');
     } finally {
       _scanning = false;
       notifyListeners();
     }
   }
 
-  /// 递归扫描目录，返回子节点列表。
-  /// 应用排除列表过滤。
-  Future<List<FileTreeNode>> _scanDirectory(String dirPath, int level) async {
-    if (level > 8) return []; // 深度限制
-
-    final dir = Directory(dirPath);
-    final entities = await dir.list().toList();
-    entities.sort((a, b) {
-      // 目录优先，再按名称排序
-      final aDir = a is Directory;
-      final bDir = b is Directory;
-      if (aDir != bDir) return aDir ? -1 : 1;
-      return p.basename(a.path).compareTo(p.basename(b.path));
+  Future<List<FileTreeNode>> _scanDirectory(
+    String directoryPath,
+    int level,
+  ) async {
+    if (level > _maxTreeDepth) return const [];
+    final entities = await fileSystem.listDirectory(directoryPath);
+    entities.sort((left, right) {
+      final leftDirectory = left is Directory;
+      final rightDirectory = right is Directory;
+      if (leftDirectory != rightDirectory) return leftDirectory ? -1 : 1;
+      return p
+          .basename(left.path)
+          .toLowerCase()
+          .compareTo(p.basename(right.path).toLowerCase());
     });
 
     final nodes = <FileTreeNode>[];
     for (final entity in entities) {
       final name = p.basename(entity.path);
-
-      // 应用排除列表
       if (_isExcluded(name)) continue;
+      final type = await FileSystemEntity.type(entity.path, followLinks: false);
+      if (type == FileSystemEntityType.link) continue;
+      final relativePath = p.relative(entity.path, from: _workspacePath);
 
-      // 跳过符号链接
-      final stat = await entity.stat();
-      if (stat.type == FileSystemEntityType.link) continue;
-
-      final relativePath = _workspacePath.isNotEmpty
-          ? p.relative(entity.path, from: _workspacePath)
-          : name;
-
-      if (entity is Directory) {
+      if (type == FileSystemEntityType.directory) {
         final children = await _scanDirectory(entity.path, level + 1);
-        // 如果目录有子节点，或者层级较浅，则保留
-        if (children.isNotEmpty || level < 3) {
-          nodes.add(FileTreeNode(
+        nodes.add(
+          FileTreeNode(
             name: name,
             path: entity.path,
             relativePath: relativePath,
             isDir: true,
             children: children,
             level: level,
-          ));
-        }
-      } else if (entity is File) {
-        // 应用分类过滤
+          ),
+        );
+      } else if (type == FileSystemEntityType.file) {
         final category = _classifyFile(name);
         if (_categoryFilter[category] != false) {
-          nodes.add(FileTreeNode(
-            name: name,
-            path: entity.path,
-            relativePath: relativePath,
-            isDir: false,
-            level: level,
-          ));
+          nodes.add(
+            FileTreeNode(
+              name: name,
+              path: entity.path,
+              relativePath: relativePath,
+              isDir: false,
+              level: level,
+            ),
+          );
         }
       }
     }
     return nodes;
   }
 
-  // ============================================================
-  // 文件操作
-  // ============================================================
-
-  /// 在指定目录中创建新文件
   Future<String> createFile(String fileName, {String? parentPath}) async {
-    final parent = parentPath ?? _workspacePath;
-    final trimmed = fileName.trim();
-    if (trimmed.isEmpty) throw ArgumentError('文件名不能为空');
-
-    final fullPath = p.join(parent, trimmed);
-    final file = File(fullPath);
-    if (await file.exists()) {
-      throw FileSystemException('文件已存在', fullPath);
-    }
-    await file.create();
+    _requireWorkspace();
+    final result = await fileSystem.createFile(
+      parentPath ?? _workspacePath,
+      fileName,
+    );
+    await logger.info('workspace', 'file_created', '已创建工作区文件');
     await scanFileTree();
-    return fullPath;
+    return result;
   }
 
-  /// 在指定目录中创建新文件夹
   Future<String> createFolder(String folderName, {String? parentPath}) async {
-    final parent = parentPath ?? _workspacePath;
-    final trimmed = folderName.trim();
-    if (trimmed.isEmpty) throw ArgumentError('文件夹名不能为空');
-
-    final fullPath = p.join(parent, trimmed);
-    final dir = Directory(fullPath);
-    if (await dir.exists()) {
-      throw FileSystemException('文件夹已存在', fullPath);
-    }
-    await dir.create();
+    _requireWorkspace();
+    final result = await fileSystem.createDirectory(
+      parentPath ?? _workspacePath,
+      folderName,
+    );
+    await logger.info('workspace', 'directory_created', '已创建工作区目录');
     await scanFileTree();
-    return fullPath;
+    return result;
   }
 
-  /// 重命名文件或文件夹
   Future<String> renameEntry(String oldPath, String newName) async {
-    final trimmed = newName.trim();
-    if (trimmed.isEmpty) throw ArgumentError('新名称不能为空');
-
-    final dir = p.dirname(oldPath);
-    final newPath = p.join(dir, trimmed);
-
-    final oldEntity = FileSystemEntity.typeSync(oldPath) == FileSystemEntityType.directory
-        ? Directory(oldPath)
-        : File(oldPath);
-
-    if (oldEntity is Directory) {
-      await oldEntity.rename(newPath);
-    } else if (oldEntity is File) {
-      await oldEntity.rename(newPath);
+    _requireWorkspace();
+    final safeOldPath = await fileSystem.validatePath(oldPath, mustExist: true);
+    final newPath = await fileSystem.renameEntry(safeOldPath, newName);
+    final oldPrefix = '$safeOldPath${p.separator}';
+    for (final document in _documents) {
+      if (document.path == safeOldPath || document.path.startsWith(oldPrefix)) {
+        final oldDocumentId = document.id;
+        final suffix = document.path.substring(safeOldPath.length);
+        document.path = '$newPath$suffix';
+        document.id = document.path;
+        document.relativePath = p.relative(document.path, from: _workspacePath);
+        document.fileName = p.basename(document.path);
+        if (_activeDocumentId == oldDocumentId) {
+          _activeDocumentId = document.id;
+        }
+        document.notifyListeners();
+      }
     }
-
-    // 如果重命名的是当前打开的文档，更新路径
-    final doc = _documents.where((d) => d.path == oldPath).firstOrNull;
-    if (doc != null) {
-      doc.path = newPath;
-      doc.relativePath = p.relative(newPath, from: _workspacePath);
-      doc.fileName = trimmed;
-      doc.notifyListeners();
-    }
-
+    await logger.info('workspace', 'entry_renamed', '已重命名工作区条目');
     await scanFileTree();
     return newPath;
   }
 
-  /// 删除文件或文件夹
-  Future<void> deleteEntry(String path) async {
-    final type = FileSystemEntity.typeSync(path);
-    if (type == FileSystemEntityType.directory) {
-      final dir = Directory(path);
-      await dir.delete(recursive: true);
-    } else if (type == FileSystemEntityType.file) {
-      await File(path).delete();
+  Future<DeletionPreview> previewDeletion(String path) {
+    return fileSystem.previewDeletion(path);
+  }
+
+  Future<IsolationResult> deleteEntry(
+    String path, {
+    bool discardUnsaved = false,
+  }) async {
+    _requireWorkspace();
+    final safePath = await fileSystem.validatePath(path, mustExist: true);
+    final affected = _documents
+        .where((document) {
+          return p.equals(document.path, safePath) ||
+              p.isWithin(safePath, document.path);
+        })
+        .toList(growable: false);
+    if (!discardUnsaved && affected.any((document) => document.isDirty)) {
+      throw const CourierException('UNSAVED_CHANGES', '删除范围包含未保存文档');
     }
 
-    // 如果删除的是当前打开的文档，关闭它
-    final doc = _documents.where((d) => d.path == path).firstOrNull;
-    if (doc != null) {
-      await closeDocument(doc.id);
+    final result = await fileSystem.moveToIsolation(safePath);
+    for (final document in affected) {
+      await closeDocument(document.id, discardUnsaved: true);
     }
-
+    await logger.info('workspace', 'entry_isolated', '工作区条目已移至隔离区');
     await scanFileTree();
+    return result;
   }
 
-  /// 读取文件内容（不打开标签页）。
   Future<String> readFileContent(String filePath) async {
-    final file = File(filePath);
-    return await file.readAsString();
+    return (await fileSystem.readTextFile(filePath)).content;
   }
 
-  /// 读取文件内容并作为新标签页打开。
-  /// 如果文件已打开，则激活对应标签。
   Future<void> openFile(String filePath) async {
-    // 检查是否已打开
-    final existing = _documents.where((d) => d.path == filePath).firstOrNull;
+    final safePath = await fileSystem.validatePath(filePath, mustExist: true);
+    final existing = _documents
+        .where((document) => document.path == safePath)
+        .firstOrNull;
     if (existing != null) {
       _activeDocumentId = existing.id;
       notifyListeners();
       return;
     }
 
-    try {
-      final file = File(filePath);
-      final content = await file.readAsString();
-      final relativePath = _workspacePath.isNotEmpty
-          ? p.relative(filePath, from: _workspacePath)
-          : filePath;
-      final doc = EditorDocument(
-        id: filePath,
-        path: filePath,
-        relativePath: relativePath,
-        fileName: p.basename(filePath),
-        content: content,
-        savedContent: content,
-      );
-      doc.addListener(notifyListeners);
-      _documents.add(doc);
-      _activeDocumentId = doc.id;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('[WorkspaceService] 打开文件失败: $e');
-      rethrow;
-    }
+    final file = await fileSystem.readTextFile(safePath);
+    final document = EditorDocument(
+      id: safePath,
+      path: safePath,
+      relativePath: p.relative(safePath, from: _workspacePath),
+      fileName: p.basename(safePath),
+      content: file.content,
+      savedContent: file.content,
+      fingerprint: file.fingerprint,
+    );
+    document.addListener(notifyListeners);
+    _documents.add(document);
+    _activeDocumentId = document.id;
+    notifyListeners();
   }
 
-  /// 创建新的未命名文档。
   void createUntitled() {
     _untitledCounter++;
     final count = _untitledCounter;
     final name = count == 1 ? '未命名.md' : '未命名 $count.md';
-    final doc = EditorDocument(
-      id: 'untitled-$count-${DateTime.now().millisecondsSinceEpoch}',
+    final document = EditorDocument(
+      id: 'untitled-$count-${DateTime.now().microsecondsSinceEpoch}',
       path: '',
       relativePath: '',
       fileName: name,
@@ -541,91 +523,289 @@ class WorkspaceService extends ChangeNotifier {
       savedContent: '',
       untitled: true,
     );
-    doc.addListener(notifyListeners);
-    _documents.add(doc);
-    _activeDocumentId = doc.id;
+    document.addListener(notifyListeners);
+    _documents.add(document);
+    _activeDocumentId = document.id;
     notifyListeners();
   }
 
-  /// 激活指定文档标签。
-  void setActiveDocument(String docId) {
-    if (_documents.any((d) => d.id == docId)) {
-      _activeDocumentId = docId;
+  void setActiveDocument(String documentId) {
+    if (_documents.any((document) => document.id == documentId)) {
+      _activeDocumentId = documentId;
       notifyListeners();
     }
   }
 
-  /// 关闭文档标签。
-  Future<bool> closeDocument(String docId) async {
-    final doc = _documents.where((d) => d.id == docId).firstOrNull;
-    if (doc == null) return true;
+  Future<bool> closeDocument(
+    String documentId, {
+    bool discardUnsaved = false,
+  }) async {
+    final document = _documents
+        .where((item) => item.id == documentId)
+        .firstOrNull;
+    if (document == null) return true;
+    if (document.isDirty && !discardUnsaved) return false;
 
-    doc.removeListener(notifyListeners);
-    doc.dispose();
-    _documents.remove(doc);
-
-    if (_activeDocumentId == docId) {
-      final index = _documents.isNotEmpty ? 0 : null;
-      _activeDocumentId =
-          index != null ? _documents[index].id : null;
+    document.removeListener(notifyListeners);
+    document.dispose();
+    _documents.remove(document);
+    if (_activeDocumentId == documentId) {
+      _activeDocumentId = _documents.firstOrNull?.id;
     }
     notifyListeners();
     return true;
   }
 
-  /// 保存当前激活的文档。
-  Future<bool> saveActiveDocument() async {
-    final doc = activeDocument;
-    if (doc == null) return false;
+  Future<bool> saveActiveDocument({bool force = false}) async {
+    final document = activeDocument;
+    if (document == null || document.untitled) return false;
+    await saveDocument(document.id, force: force);
+    return true;
+  }
 
-    if (doc.untitled) {
-      return false;
+  Future<void> saveDocument(String documentId, {bool force = false}) async {
+    final document = _documents
+        .where((item) => item.id == documentId)
+        .firstOrNull;
+    if (document == null) {
+      throw const CourierException('DOCUMENT_NOT_FOUND', '文档不存在');
     }
-
+    if (document.untitled) {
+      throw const CourierException('SAVE_AS_REQUIRED', '未命名文档需要另存为');
+    }
     try {
-      final file = File(doc.path);
-      await file.writeAsString(doc.content);
-      doc.markSaved();
-      return true;
-    } catch (e) {
-      debugPrint('[WorkspaceService] 保存文件失败: $e');
+      final fingerprint = await fileSystem.atomicWriteText(
+        document.path,
+        document.content,
+        expectedFingerprint: document.fingerprint,
+        force: force,
+      );
+      document.markSaved(fingerprint);
+      await logger.info('workspace', 'file_saved', '工作区文件已保存');
+    } on CourierException catch (error) {
+      if (error.code == 'FILE_CHANGED_EXTERNALLY') {
+        document.external = true;
+        document.notifyListeners();
+      }
       rethrow;
     }
   }
 
-  /// 将未命名文档另存为工作区内的新文件。
-  Future<bool> saveAs(String docId, String fileName) async {
-    final doc = _documents.where((d) => d.id == docId).firstOrNull;
-    if (doc == null || _workspacePath.isEmpty) return false;
+  Future<void> reloadDocument(String documentId) async {
+    final document = _documents
+        .where((item) => item.id == documentId)
+        .firstOrNull;
+    if (document == null || document.untitled) {
+      throw const CourierException('DOCUMENT_NOT_FOUND', '文档不存在');
+    }
+    final file = await fileSystem.readTextFile(document.path);
+    document.replaceFromDisk(file);
+    notifyListeners();
+  }
 
-    final trimmed = fileName.trim();
-    if (trimmed.isEmpty) return false;
+  Future<bool> saveAs(
+    String documentId,
+    String relativePath, {
+    bool overwrite = false,
+  }) async {
+    final document = _documents
+        .where((item) => item.id == documentId)
+        .firstOrNull;
+    if (document == null || _workspacePath.isEmpty) return false;
+    final safeRelative = _validateRelativeSavePath(relativePath);
+    final fullPath = await fileSystem.validatePath(
+      p.join(_workspacePath, safeRelative),
+    );
+    if (_documents.any(
+      (item) => !identical(item, document) && p.equals(item.path, fullPath),
+    )) {
+      throw const CourierException('DOCUMENT_ALREADY_OPEN', '目标文件已在另一个标签中打开');
+    }
+    if (!overwrite &&
+        await FileSystemEntity.type(fullPath, followLinks: false) !=
+            FileSystemEntityType.notFound) {
+      throw const CourierException('ENTRY_EXISTS', '目标文件已存在');
+    }
+    final fingerprint = await fileSystem.atomicWriteText(
+      fullPath,
+      document.content,
+      force: overwrite,
+    );
+    final oldDocumentId = document.id;
+    document.id = fullPath;
+    document.path = fullPath;
+    document.relativePath = safeRelative;
+    document.fileName = p.basename(safeRelative);
+    document.untitled = false;
+    if (_activeDocumentId == oldDocumentId) {
+      _activeDocumentId = document.id;
+    }
+    document.markSaved(fingerprint);
+    notifyListeners();
+    await scanFileTree();
+    return true;
+  }
 
-    try {
-      final fullPath = p.join(_workspacePath, trimmed);
-      final file = File(fullPath);
-      await file.writeAsString(doc.content);
+  Future<void> _saveWorkspacePreferences({
+    List<String>? excludePatterns,
+    bool? showHidden,
+    Map<String, bool>? categoryFilter,
+  }) async {
+    _requireWorkspace();
+    final current = configService.preferences;
+    await configService.save(
+      current.copyWith(
+        excludePatterns: List<String>.from(excludePatterns ?? _excludePatterns),
+        showHiddenFiles: showHidden ?? _showHidden,
+        fileFilters: Map<String, bool>.from(categoryFilter ?? _categoryFilter),
+      ),
+    );
+  }
 
-      doc.path = fullPath;
-      doc.relativePath = trimmed;
-      doc.fileName = trimmed;
-      doc.untitled = false;
-      doc.markSaved();
-      notifyListeners();
+  Future<void> _closeAllDocuments({required bool discardUnsaved}) async {
+    final ids = _documents
+        .map((document) => document.id)
+        .toList(growable: false);
+    for (final id in ids) {
+      await closeDocument(id, discardUnsaved: discardUnsaved);
+    }
+  }
 
-      await scanFileTree();
-      return true;
-    } catch (e) {
-      debugPrint('[WorkspaceService] 另存为失败: $e');
-      rethrow;
+  List<String> _sanitizeExcludePatterns(List<String> patterns) {
+    final values = patterns
+        .map(_sanitizeExcludePattern)
+        .toSet()
+        .take(256)
+        .toList(growable: false);
+    if (!values.any((item) => item.toLowerCase() == '.courier')) {
+      return ['.Courier', ...values];
+    }
+    return values;
+  }
+
+  String _sanitizeExcludePattern(String value) {
+    final pattern = value.trim();
+    if (pattern.isEmpty ||
+        pattern.length > 128 ||
+        pattern.contains(RegExp(r'[\x00-\x1f\\/]'))) {
+      throw const CourierException('INVALID_FILTER', '排除规则无效');
+    }
+    return pattern;
+  }
+
+  String _validateRelativeSavePath(String value) {
+    final normalized = p.normalize(value.trim());
+    if (normalized.isEmpty ||
+        normalized == '.' ||
+        p.isAbsolute(normalized) ||
+        normalized == '..' ||
+        normalized.startsWith('..${p.separator}')) {
+      throw const CourierException('INVALID_PATH', '另存为路径无效');
+    }
+    for (final segment in p.split(normalized)) {
+      fileSystem.validateEntryName(segment);
+    }
+    return normalized;
+  }
+
+  bool _isExcluded(String name) {
+    if (!_showHidden && name.startsWith('.')) return true;
+    final lowerName = name.toLowerCase();
+    for (final pattern in _excludePatterns) {
+      final lowerPattern = pattern.toLowerCase();
+      if (lowerPattern.contains('*') || lowerPattern.contains('?')) {
+        if (_matchGlob(lowerName, lowerPattern)) return true;
+      } else if (lowerName == lowerPattern) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _matchGlob(String name, String pattern) {
+    final buffer = StringBuffer('^');
+    for (final rune in pattern.runes) {
+      final character = String.fromCharCode(rune);
+      if (character == '*') {
+        buffer.write('.*');
+      } else if (character == '?') {
+        buffer.write('.');
+      } else {
+        buffer.write(RegExp.escape(character));
+      }
+    }
+    buffer.write(r'$');
+    return RegExp(buffer.toString()).hasMatch(name);
+  }
+
+  String _classifyFile(String name) {
+    final extension = p.extension(name).toLowerCase();
+    if ({'.md', '.markdown'}.contains(extension)) return 'md';
+    if ({
+      '.dart',
+      '.go',
+      '.js',
+      '.ts',
+      '.py',
+      '.java',
+      '.c',
+      '.cpp',
+      '.rs',
+      '.rb',
+      '.kt',
+      '.swift',
+    }.contains(extension)) {
+      return 'code';
+    }
+    if ({'.json', '.yaml', '.yml', '.toml', '.xml'}.contains(extension)) {
+      return 'json';
+    }
+    if ({
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.gif',
+      '.webp',
+      '.svg',
+      '.ico',
+      '.bmp',
+    }.contains(extension)) {
+      return 'image';
+    }
+    if ({'.zip', '.tar', '.gz', '.rar', '.7z'}.contains(extension)) {
+      return 'archive';
+    }
+    if ({'.mp3', '.wav', '.flac', '.aac', '.ogg'}.contains(extension)) {
+      return 'audio';
+    }
+    if ({'.mp4', '.avi', '.mkv', '.mov', '.webm'}.contains(extension)) {
+      return 'video';
+    }
+    if ({'.txt', '.log', '.csv', '.ini', '.cfg'}.contains(extension)) {
+      return 'text';
+    }
+    return 'other';
+  }
+
+  int _countFiles(List<FileTreeNode> nodes) {
+    var count = 0;
+    for (final node in nodes) {
+      count += node.isDir ? _countFiles(node.children) : 1;
+    }
+    return count;
+  }
+
+  void _requireWorkspace() {
+    if (_workspacePath.isEmpty) {
+      throw const CourierException('WORKSPACE_REQUIRED', '需要先打开工作区');
     }
   }
 
   @override
   void dispose() {
-    for (final doc in _documents) {
-      doc.removeListener(notifyListeners);
-      doc.dispose();
+    for (final document in _documents) {
+      document.removeListener(notifyListeners);
+      document.dispose();
     }
     _documents.clear();
     super.dispose();

@@ -1,0 +1,114 @@
+import 'package:courier_flutter/services/app_logger.dart';
+import 'package:courier_flutter/services/courier_service.dart';
+import 'package:courier_flutter/services/secure_storage_service.dart';
+import 'package:courier_flutter/services/settings_state.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/test_fakes.dart';
+
+void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  test('加载时约束数值并安全回退无效标识', () async {
+    SharedPreferences.setMockInitialValues({
+      'ai_temperature': 8.0,
+      'ai_max_tokens': 1,
+      'ai_provider': 'unsupported-provider',
+      'ai_model': 'stored-model',
+      'editor_font_size': 80,
+      'max_concurrent': 40,
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {'COURIER_AI_MODEL_ID': 'invalid\u0000model'},
+    );
+    addTearDown(settings.dispose);
+
+    await settings.load();
+    expect(settings.aiTemperature, 2.0);
+    expect(settings.aiMaxTokens, 256);
+    expect(settings.aiProviderId, 'openai');
+    expect(settings.aiModelId, isEmpty);
+    expect(settings.editorFontSize, 24);
+    expect(settings.maxConcurrent, 10);
+  });
+
+  test('设置器拒绝非法值并将密钥仅写入凭据存储', () async {
+    final credentialStore = MemoryCredentialStore();
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: credentialStore),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    await expectLater(
+      settings.setAiProviderId('unsupported-provider'),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    await expectLater(
+      settings.setAiTemperature(double.nan),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+
+    final credential = generatedCredential();
+    await settings.saveApiKey(credential);
+    expect(settings.apiKeyConfigured, isTrue);
+    expect(credentialStore.values.values, contains(credential));
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getKeys().any((key) => key.contains('key')), isFalse);
+
+    await settings.deleteApiKey();
+    expect(settings.apiKeyConfigured, isFalse);
+    expect(credentialStore.values, isEmpty);
+  });
+
+  test('CourierService 实时同步日志级别', () async {
+    final secureStorage = SecureStorageService(store: MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final service = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+    );
+    addTearDown(() {
+      service.dispose();
+      settings.dispose();
+    });
+
+    expect(logger.minimumLevel, AppLogLevel.info);
+    await settings.setLogLevel(AppLogLevel.debug);
+    expect(logger.minimumLevel, AppLogLevel.debug);
+  });
+
+  test('偏好写入失败时不提交内存状态', () async {
+    var rejectPreferenceAccess = false;
+    Future<SharedPreferences> loadPreferences() async {
+      if (rejectPreferenceAccess) {
+        throw StateError('preferences unavailable');
+      }
+      return SharedPreferences.getInstance();
+    }
+
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      preferencesLoader: loadPreferences,
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.autoSave, isFalse);
+
+    rejectPreferenceAccess = true;
+    await expectLater(settings.setAutoSave(true), throwsStateError);
+    expect(settings.autoSave, isFalse);
+  });
+}

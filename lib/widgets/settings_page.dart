@@ -2,7 +2,9 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -14,6 +16,7 @@ import '../services/courier_service.dart';
 import '../services/models.dart';
 import '../services/settings_state.dart';
 import '../services/workspace_service.dart';
+import '../theme.dart';
 import 'animations.dart';
 import 'glass.dart';
 
@@ -43,6 +46,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 模糊强度拖动中的临时值（null = 未在拖动）
   double? _dragBlurSigma;
+
+  /// 背景图片透明度拖动中的临时值（null = 未在拖动）
+  double? _dragBackgroundOpacity;
   bool _savingProvider = false;
   String? _error;
   bool _errorCopied = false;
@@ -1044,8 +1050,235 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        const Padding(
+          padding: EdgeInsets.only(top: 18, bottom: 10),
+          child: Text(
+            '背景图片',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+        ),
+        _buildBackgroundImageSettings(settings),
+        const Padding(
+          padding: EdgeInsets.only(top: 18, bottom: 10),
+          child: Text(
+            'UI 样式',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+        ),
+        SegmentedButton<AppUiStyle>(
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(
+              value: AppUiStyle.material3,
+              icon: Icon(Icons.auto_awesome, size: 15),
+              label: Text('Material 3'),
+            ),
+            ButtonSegment(
+              value: AppUiStyle.vscode,
+              icon: Icon(Icons.code, size: 15),
+              label: Text('VSCode 风格'),
+            ),
+          ],
+          selected: {settings.uiStyle},
+          onSelectionChanged: (selection) => unawaited(
+            _applySetting(
+              () => settings.setUiStyle(selection.first),
+            ),
+          ),
+          style: const ButtonStyle(
+            visualDensity: VisualDensity.compact,
+            textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text(
+            'UI 样式切换后立即生效，无需重启',
+            style: TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+        ),
       ],
     );
+  }
+
+  /// 背景图片配置：实时预览 + 选择/清除 + 透明度滑杆。
+  /// 透明度拖动过程仅本地预览（不写盘），松手时一次性持久化，
+  /// 与模糊强度交互一致，避免拖动期间每帧写入 SharedPreferences。
+  Widget _buildBackgroundImageSettings(SettingsState settings) {
+    final path = settings.backgroundImagePath;
+    final opacity = _dragBackgroundOpacity ?? settings.backgroundOpacity;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildBackgroundPreview(settings, opacity),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    path.isEmpty ? '未设置背景图片' : path,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: path.isEmpty ? Colors.white38 : Colors.white70,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: _pickBackgroundImage,
+                        icon: const Icon(Icons.image_outlined, size: 16),
+                        label: const Text('选择图片…'),
+                      ),
+                      if (path.isNotEmpty)
+                        OutlinedButton.icon(
+                          onPressed: () => unawaited(_clearBackgroundImage()),
+                          icon: const Icon(Icons.clear, size: 15),
+                          label: const Text('清除'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 150,
+                child: Text(
+                  '背景图片透明度',
+                  style: TextStyle(fontSize: 13, color: Colors.white70),
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  key: const ValueKey('background-opacity-slider'),
+                  value: opacity.clamp(0.0, 1.0),
+                  max: 1,
+                  divisions: 20,
+                  onChanged: path.isEmpty
+                      ? null
+                      : (value) =>
+                            setState(() => _dragBackgroundOpacity = value),
+                  onChangeEnd: path.isEmpty
+                      ? null
+                      : (value) {
+                          unawaited(
+                            _applySetting(() async {
+                              await settings.setBackgroundOpacity(value);
+                              if (mounted) {
+                                setState(() => _dragBackgroundOpacity = null);
+                              }
+                            }),
+                          );
+                        },
+                ),
+              ),
+              SizedBox(
+                width: 80,
+                child: Text(
+                  '${(opacity * 100).round()}%',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 12, color: accentLightOf(context)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 背景效果实时预览（图片 + 透明度 + 遮罩），无图片时显示纯色占位。
+  /// 拖动透明度滑杆时用临时值刷新，所见即所得。
+  Widget _buildBackgroundPreview(SettingsState settings, double opacity) {
+    final isVscode = settings.uiStyle == AppUiStyle.vscode;
+    final solidColor = isVscode
+        ? VscodePalette.background
+        : const Color(0xFF101216);
+    final path = settings.backgroundImagePath;
+    return Container(
+      width: 150,
+      height: 84,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(kRadiusSm),
+        border: Border.all(color: glassBorderOf(context)),
+      ),
+      child: path.isEmpty
+          ? Container(
+              color: solidColor,
+              alignment: Alignment.center,
+              child: const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.image_outlined, size: 18, color: Colors.white24),
+                  SizedBox(height: 4),
+                  Text(
+                    '无背景图',
+                    style: TextStyle(fontSize: 11, color: Colors.white38),
+                  ),
+                ],
+              ),
+            )
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                Opacity(
+                  opacity: opacity,
+                  child: Image.file(
+                    File(path),
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    errorBuilder: (_, _, _) => Container(color: solidColor),
+                  ),
+                ),
+                Container(
+                  color: isVscode
+                      ? const Color(0xF21E1E1E)
+                      : const Color(0xCC0C1220),
+                ),
+              ],
+            ),
+    );
+  }
+
+  /// 选择本地图片作为背景；取消选择则无操作
+  Future<void> _pickBackgroundImage() async {
+    const typeGroup = XTypeGroup(
+      label: '图片',
+      extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'],
+    );
+    final file = await openFile(acceptedTypeGroups: const [typeGroup]);
+    if (file == null || !mounted) return;
+    await _applySetting(
+      () => context.read<SettingsState>().setBackgroundImagePath(file.path),
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('背景图片已应用')),
+      );
+    }
+  }
+
+  Future<void> _clearBackgroundImage() async {
+    await _applySetting(
+      () => context.read<SettingsState>().setBackgroundImagePath(''),
+    );
+    if (mounted) setState(() => _dragBackgroundOpacity = null);
   }
 
   Widget _accentSwatch({

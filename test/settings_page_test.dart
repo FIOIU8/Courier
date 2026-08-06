@@ -1,5 +1,7 @@
 // settings_page_test.dart - 设置页渲染测试。
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -123,6 +125,138 @@ void main() {
     await tester.tap(find.text('青绿'));
     await tester.pumpAndSettle();
     expect(settings.accentColor.toARGB32(), 0xFF23B8A4, reason: '主题色应恢复默认青绿');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('外观区块：UI 样式即时切换、背景图片透明度拖动松手持久化', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+    // 真实文件 IO 需在 runAsync 中执行（testWidgets 的 FakeAsync 区域中
+    // dart:io 异步操作不会完成）
+    late final Directory tempDir;
+    late final File imageFile;
+    await tester.runAsync(() async {
+      tempDir = await Directory.systemTemp.createTemp('courier_bg_test');
+      imageFile = File('${tempDir.path}${Platform.pathSeparator}bg.png');
+      // 1x1 透明 PNG
+      await imageFile.writeAsBytes(const [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+        0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+      ]);
+    });
+    addTearDown(() => tempDir.delete(recursive: true));
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('外观').first);
+    await tester.pumpAndSettle();
+
+    // 未设置背景图片：占位预览 + 透明度滑杆禁用
+    expect(find.text('无背景图'), findsOneWidget);
+    expect(find.text('选择图片…'), findsOneWidget);
+    expect(find.text('清除'), findsNothing);
+    var slider = tester.widget<Slider>(
+      find.byKey(const ValueKey('background-opacity-slider')),
+    );
+    expect(slider.onChanged, isNull, reason: '未设置背景图片时透明度滑杆应禁用');
+
+    // UI 样式切换即时生效并持久化
+    await tester.tap(find.text('VSCode 风格'));
+    await tester.pumpAndSettle();
+    expect(settings.uiStyle, AppUiStyle.vscode);
+    var prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('theme_ui_style'), 'vscode');
+    await tester.tap(find.text('Material 3'));
+    await tester.pumpAndSettle();
+    expect(settings.uiStyle, AppUiStyle.material3);
+
+    // 设置背景图片后：滑杆可用，拖动松手一次性持久化
+    await settings.setBackgroundImagePath(imageFile.path);
+    await tester.pump();
+    expect(find.text('清除'), findsOneWidget);
+    expect(
+      find.text(imageFile.path),
+      findsOneWidget,
+      reason: '应显示当前背景图片路径',
+    );
+
+    slider = tester.widget<Slider>(
+      find.byKey(const ValueKey('background-opacity-slider')),
+    );
+    expect(slider.onChanged, isNotNull, reason: '设置背景图片后透明度滑杆应可用');
+
+    final opacityBefore = settings.backgroundOpacity;
+    await tester.drag(
+      find.byKey(const ValueKey('background-opacity-slider')),
+      const Offset(80, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      settings.backgroundOpacity,
+      isNot(opacityBefore),
+      reason: '拖动松手后透明度应更新',
+    );
+    prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getDouble('theme_background_opacity'),
+      settings.backgroundOpacity,
+      reason: '透明度应在松手时持久化',
+    );
+
+    // 清除背景图片：路径清空、滑杆恢复禁用、拖动状态复位
+    await tester.tap(find.text('清除'));
+    await tester.pumpAndSettle();
+    expect(settings.backgroundImagePath, isEmpty);
+    expect(find.text('无背景图'), findsOneWidget);
+    slider = tester.widget<Slider>(
+      find.byKey(const ValueKey('background-opacity-slider')),
+    );
+    expect(slider.onChanged, isNull);
     expect(tester.takeException(), isNull);
   });
 

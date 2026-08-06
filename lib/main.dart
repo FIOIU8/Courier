@@ -780,12 +780,12 @@ class _BackgroundState extends State<_Background> {
             ),
           ),
         ),
-        // 深色半透明遮罩，保证前景可读
+        // 浅色遮罩：仅轻微压暗保证前景可读，不掩盖背景图片效果
         DecoratedBox(
           decoration: BoxDecoration(
             color: isVscode
-                ? const Color(0xF21E1E1E)
-                : const Color(0xCC0C1220),
+                ? const Color(0x591E1E1E)
+                : const Color(0x590C1220),
           ),
         ),
       ],

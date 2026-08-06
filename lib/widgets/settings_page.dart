@@ -1266,8 +1266,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 Container(
                   color: isVscode
-                      ? const Color(0xF21E1E1E)
-                      : const Color(0xCC0C1220),
+                      ? const Color(0x591E1E1E)
+                      : const Color(0x590C1220),
                 ),
               ],
             ),

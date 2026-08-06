@@ -33,7 +33,7 @@ class SettingsState extends ChangeNotifier {
   static const int maxBackgroundImagePathLength = 1024;
 
   /// 背景图片默认透明度
-  static const double defaultBackgroundOpacity = 0.35;
+  static const double defaultBackgroundOpacity = 0.5;
 
   /// 背景图片历史记录上限
   static const int maxBackgroundImageHistory = 8;

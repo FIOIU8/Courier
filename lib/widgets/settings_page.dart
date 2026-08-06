@@ -161,8 +161,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: kDialogShape,
-        backgroundColor: kGlassFloatBg,
+        shape: kDialogShapeOf(dialogContext),
+        backgroundColor: glassFloatBgOf(dialogContext),
         title: const Text('删除自定义供应商'),
         content: Text(
           deletingCurrent
@@ -256,7 +256,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Row(
                     children: [
                       SizedBox(width: 190, child: _buildSidebar()),
-                      const VerticalDivider(width: 1, color: kGlassBorder),
+                      const VerticalDivider(width: 1),
                       Expanded(child: _buildContent()),
                     ],
                   ),
@@ -286,7 +286,7 @@ class _SettingsPageState extends State<SettingsPage> {
             child: ListTile(
               dense: true,
               selected: _activeSection == index,
-              selectedTileColor: kGlassSelectedBg,
+              selectedTileColor: glassSelectedBgOf(context),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(kRadiusSm),
               ),
@@ -567,7 +567,7 @@ class _SettingsPageState extends State<SettingsPage> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(
         children: [
-          const Divider(height: 1, color: kGlassBorder),
+          const Divider(height: 1),
           if (modelIds.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
@@ -635,9 +635,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               if (index != modelIds.length - 1)
-                const Divider(height: 1, color: kGlassBorder),
+                const Divider(height: 1),
             ],
-          const Divider(height: 1, color: kGlassBorder),
+          const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
             child: Row(
@@ -712,8 +712,8 @@ class _SettingsPageState extends State<SettingsPage> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          shape: kDialogShape,
-          backgroundColor: kGlassFloatBg,
+          shape: kDialogShapeOf(dialogContext),
+          backgroundColor: glassFloatBgOf(dialogContext),
           title: const Text('删除默认模型'),
           content: const Text('删除后默认模型将自动回退为列表中的第一个模型。'),
           actions: [
@@ -742,7 +742,7 @@ class _SettingsPageState extends State<SettingsPage> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(
         children: [
-          const Divider(height: 1, color: kGlassBorder),
+          const Divider(height: 1),
           for (var index = 0; index < providers.length; index++) ...[
             Padding(
               key: ValueKey('custom-provider-${providers[index].id}'),
@@ -831,9 +831,9 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             if (index != providers.length - 1)
-              const Divider(height: 1, color: kGlassBorder),
+              const Divider(height: 1),
           ],
-          const Divider(height: 1, color: kGlassBorder),
+          const Divider(height: 1),
         ],
       ),
     );
@@ -1731,8 +1731,8 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
   Widget build(BuildContext context) {
     final editing = widget.existingProvider != null || _isBuiltIn;
     return AlertDialog(
-      shape: kDialogShape,
-      backgroundColor: kGlassFloatBg,
+      shape: kDialogShapeOf(context),
+      backgroundColor: glassFloatBgOf(context),
       title: Text(
         _isBuiltIn
             ? '编辑供应商设置'
@@ -2091,8 +2091,8 @@ class _AddModelDialogState extends State<_AddModelDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      shape: kDialogShape,
-      backgroundColor: kGlassFloatBg,
+      shape: kDialogShapeOf(context),
+      backgroundColor: glassFloatBgOf(context),
       title: const Text('添加模型'),
       content: SizedBox(
         width: 460,

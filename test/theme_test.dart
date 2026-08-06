@@ -18,12 +18,14 @@ void main() {
     expect(vscode.visualDensity, VisualDensity.compact);
     expect(material.visualDensity, isNot(VisualDensity.compact));
 
-    // 配色：VSCode 主色固定为 #007ACC、表面为 #252526、前景 #CCCCCC
-    expect(vscode.colorScheme.primary, const Color(0xFF007ACC));
+    // 表面/前景/边界为 VSCode 中性色
     expect(vscode.colorScheme.surface, const Color(0xFF252526));
     expect(vscode.colorScheme.onSurface, const Color(0xFFCCCCCC));
     expect(vscode.colorScheme.outline, const Color(0xFF3C3C3C));
-    expect(vscode.colorScheme.primary, isNot(material.colorScheme.primary));
+    expect(vscode.colorScheme.surface, isNot(material.colorScheme.surface));
+    // 交互控件色（primary）跟随强调色：与 Material 3 同源，而非硬编码蓝
+    expect(vscode.colorScheme.primary, material.colorScheme.primary);
+    expect(vscode.colorScheme.primary, isNot(const Color(0xFF007ACC)));
   });
 
   test('VSCode 主题组件扁平化：无阴影卡片与面板色对话框', () {

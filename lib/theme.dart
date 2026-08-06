@@ -20,11 +20,12 @@ abstract final class VscodePalette {
 }
 
 /// 根据 [style] 构建应用主题。
-/// [accentColor] 为 Material 3 样式的强调色（自定义主题）。
+/// [accentColor] 为强调色（自定义主题）：Material 3 驱动整套配色；
+/// VSCode 风格中驱动交互控件（按钮/滑杆/Switch/选中态），表面保持中性扁平。
 ThemeData buildAppTheme(AppUiStyle style, Color accentColor) {
   return switch (style) {
     AppUiStyle.material3 => _buildMaterial3Theme(accentColor),
-    AppUiStyle.vscode => _buildVscodeTheme(),
+    AppUiStyle.vscode => _buildVscodeTheme(accentColor),
   };
 }
 
@@ -34,33 +35,31 @@ ThemeData _buildMaterial3Theme(Color accentColor) {
     colorSchemeSeed: accentColor,
     useMaterial3: true,
     fontFamily: 'Microsoft YaHei UI',
+    // 显式分割线色（对齐 glass.dart 的 kGlassBorder 0x1F615775），
+    // 使全应用的 Divider()/VerticalDivider() 视觉一致且不残留蓝色调。
+    dividerTheme: const DividerThemeData(color: Color(0x1F615775)),
   );
 }
 
-ThemeData _buildVscodeTheme() {
-  
+ThemeData _buildVscodeTheme(Color accentColor) {
+  // 从强调色派生交互色（onPrimary/onSecondary 等对比度自动处理），
+  // 仅把表面/边界替换为 VSCode 中性扁平色。
+  final scheme = ColorScheme.fromSeed(
+    seedColor: accentColor,
+    brightness: Brightness.dark,
+  ).copyWith(
+    surface: VscodePalette.panel,
+    onSurface: VscodePalette.foreground,
+    onSurfaceVariant: VscodePalette.foregroundMuted,
+    surfaceContainerHighest: const Color(0xFF2D2D2D),
+    outline: VscodePalette.border,
+    outlineVariant: VscodePalette.border,
+  );
   return ThemeData(
     brightness: Brightness.dark,
     useMaterial3: true,
     fontFamily: 'Microsoft YaHei UI',
-    colorScheme: const ColorScheme.dark(
-      primary: VscodePalette.accent,
-      onPrimary: Colors.white,
-      secondary: VscodePalette.accent,
-      onSecondary: Colors.white,
-      secondaryContainer: VscodePalette.selection,
-      onSecondaryContainer: Color(0xFFD5EFFF),
-      surface: VscodePalette.panel,
-      onSurface: VscodePalette.foreground,
-      onSurfaceVariant: VscodePalette.foregroundMuted,
-      surfaceContainerHighest: Color(0xFF2D2D2D),
-      outline: VscodePalette.border,
-      outlineVariant: VscodePalette.border,
-      error: Color(0xFFF48771),
-      onError: Colors.white,
-      shadow: Colors.black,
-      scrim: Colors.black,
-    ),
+    colorScheme: scheme,
     visualDensity: VisualDensity.compact,
     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     dividerTheme: const DividerThemeData(color: VscodePalette.border),

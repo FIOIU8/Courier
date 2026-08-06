@@ -67,9 +67,9 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
     return Container(
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -117,9 +117,9 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
     final accent = accentColorOf(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -135,7 +135,7 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
             child: DropdownButton<String>(
               value: _filterStatus,
               isDense: true,
-              dropdownColor: kGlassFloatBg,
+              dropdownColor: glassFloatBgOf(context),
               style: const TextStyle(fontSize: 11, color: Colors.white70),
               items: const [
                 DropdownMenuItem(value: 'all', child: Text('全部')),
@@ -224,7 +224,7 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
           padding: const EdgeInsets.symmetric(vertical: 4),
           itemCount: tasks.length,
           separatorBuilder: (_, _) =>
-              const Divider(height: 1, color: kGlassBorder),
+              const Divider(height: 1),
           itemBuilder: (context, index) {
             final task = tasks[index];
             return _TaskRow(
@@ -245,9 +245,9 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
   Widget _buildTaskDetail(TaskItem task) {
     return Container(
       constraints: const BoxConstraints(maxHeight: 310),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(top: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(top: BorderSide(color: glassBorderOf(context))),
       ),
       child: Column(
         children: [
@@ -626,7 +626,7 @@ class _TaskRow extends StatelessWidget {
     return AnimatedContainer(
       duration: kAnimDurationFast,
       curve: kAnimCurveIn,
-      color: selected ? kGlassSelectedBg : Colors.transparent,
+      color: selected ? glassSelectedBgOf(context) : Colors.transparent,
       child: Material(
         color: Colors.transparent,
         child: InkWell(

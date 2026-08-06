@@ -131,9 +131,9 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     return Container(
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -312,9 +312,9 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
   Widget _buildExcludePanel(BuildContext context, WorkspaceService ws) {
     return Container(
       constraints: const BoxConstraints(maxHeight: 200),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Column(
         children: [
@@ -343,7 +343,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
               ],
             ),
           ),
-          const Divider(height: 1, color: kGlassBorder),
+          const Divider(height: 1),
           Expanded(
             child: ListView.builder(
               shrinkWrap: true,
@@ -423,8 +423,10 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                         fontSize: 12,
                         color: Colors.white24,
                       ),
-                      enabledBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1E2438)),
+                      enabledBorder: UnderlineInputBorder(
+                        borderSide: BorderSide(
+                          color: glassInputUnderlineOf(context),
+                        ),
                       ),
                       focusedBorder: UnderlineInputBorder(
                         borderSide: BorderSide(color: accentColorOf(context)),
@@ -470,9 +472,9 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -783,9 +785,9 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
             child: Container(
               width: 176,
               decoration: BoxDecoration(
-                color: kGlassFloatBg,
+                color: glassFloatBgOf(context),
                 borderRadius: BorderRadius.circular(kRadiusMd),
-                border: Border.all(color: kGlassBorder),
+                border: Border.all(color: glassBorderOf(context)),
                 boxShadow: kShadowLg,
               ),
               child: Column(
@@ -886,7 +888,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       final item = items[i];
       // 分隔线
       if (i > 0 && (items[i - 1].isDanger != item.isDanger)) {
-        widgets.add(const Divider(height: 1, color: kGlassBorder));
+        widgets.add(const Divider(height: 1));
       }
       widgets.add(_MenuItemWidget(item: item));
     }
@@ -908,8 +910,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: kGlassFloatBg,
-        shape: kDialogShape,
+        backgroundColor: glassFloatBgOf(ctx),
+        shape: kDialogShapeOf(ctx),
         title: Text(
           type == 'file' ? '创建文件' : '创建文件夹',
           style: const TextStyle(fontSize: 15, color: Colors.white),
@@ -930,8 +932,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
               style: const TextStyle(fontSize: 14, color: Colors.white),
               decoration: InputDecoration(
                 labelText: type == 'file' ? '文件名' : '文件夹名称',
-                enabledBorder: const UnderlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1E2438)),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: glassInputUnderlineOf(ctx)),
                 ),
                 focusedBorder: UnderlineInputBorder(
                   borderSide: BorderSide(color: accentColorOf(ctx)),
@@ -988,8 +990,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: kGlassFloatBg,
-        shape: kDialogShape,
+        backgroundColor: glassFloatBgOf(ctx),
+        shape: kDialogShapeOf(ctx),
         title: const Text(
           '重命名',
           style: TextStyle(fontSize: 15, color: Colors.white),
@@ -1001,8 +1003,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           controller: TextEditingController(text: node.name),
           style: const TextStyle(fontSize: 14, color: Colors.white),
           decoration: InputDecoration(
-            enabledBorder: const UnderlineInputBorder(
-              borderSide: BorderSide(color: Color(0xFF1E2438)),
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: glassInputUnderlineOf(ctx)),
             ),
             focusedBorder: UnderlineInputBorder(
               borderSide: BorderSide(color: accentColorOf(ctx)),
@@ -1060,8 +1062,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
-          backgroundColor: kGlassFloatBg,
-          shape: kDialogShape,
+          backgroundColor: glassFloatBgOf(dialogContext),
+          shape: kDialogShapeOf(dialogContext),
           title: const Text(
             '移至隔离区',
             style: TextStyle(fontSize: 15, color: Colors.white),
@@ -1340,7 +1342,7 @@ class _TileRowState extends State<_TileRow> {
           height: 28,
           decoration: BoxDecoration(
             color: widget.isActive
-                ? kGlassSelectedBg
+                ? glassSelectedBgOf(context)
                 : (_hover ? kGlassHoverBg : null),
             borderRadius: BorderRadius.circular(kRadiusSm),
           ),

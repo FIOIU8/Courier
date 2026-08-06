@@ -77,12 +77,24 @@ Color accentColorOf(BuildContext context) =>
 Color accentLightOf(BuildContext context) =>
     context.watch<SettingsState>().accentLightColor;
 
-/// 当前 UI 样式下的头部/状态栏底色（VSCode 风格为扁平面板色）。
+/// 当前 UI 样式下的头部/状态栏底色（VSCode 风格为略亮于面板的中性色）。
 /// 调用方需位于 Provider 树内且处于 build 上下文。
 Color glassHeaderBgOf(BuildContext context) =>
     context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
-    ? VscodePalette.panel
+    ? const Color(0xFF2D2D2D)
     : kGlassHeaderBg;
+
+/// 当前 UI 样式下的浮层底色（对话框、右键菜单，VSCode 风格为中性面板色）。
+Color glassFloatBgOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? const Color(0xFF2D2D2D)
+    : kGlassFloatBg;
+
+/// 当前 UI 样式下的选中高亮（VSCode 风格为选中蓝）。
+Color glassSelectedBgOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? VscodePalette.selection
+    : kGlassSelectedBg;
 
 /// 当前 UI 样式下的玻璃边界色。
 Color glassBorderOf(BuildContext context) =>
@@ -90,10 +102,16 @@ Color glassBorderOf(BuildContext context) =>
     ? VscodePalette.border
     : kGlassBorder;
 
-/// 统一对话框圆角与边框样式
-ShapeBorder get kDialogShape => RoundedRectangleBorder(
+/// 当前 UI 样式下输入框未聚焦底线的颜色（VSCode 风格为中性边界色）。
+Color glassInputUnderlineOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? VscodePalette.border
+    : const Color(0xFF1E2438);
+
+/// 统一对话框圆角与边框样式（随 UI 样式联动）。
+ShapeBorder kDialogShapeOf(BuildContext context) => RoundedRectangleBorder(
   borderRadius: BorderRadius.circular(kRadiusLg),
-  side: const BorderSide(color: kGlassBorder),
+  side: BorderSide(color: glassBorderOf(context)),
 );
 
 // ============================================================

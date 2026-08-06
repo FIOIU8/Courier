@@ -158,9 +158,9 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
     return Container(
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -189,7 +189,7 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
                       value: modelIds.contains(currentModel) ? currentModel : null,
                       isExpanded: true,
                       isDense: true,
-                      dropdownColor: kGlassFloatBg,
+                      dropdownColor: glassFloatBgOf(context),
                       hint: Text(
                         currentModel.isEmpty ? '选择模型' : currentModel,
                         maxLines: 1,
@@ -323,9 +323,9 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
         !service.aiSending;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(top: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(top: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -349,11 +349,11 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
                 ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(18),
-                  borderSide: const BorderSide(color: kGlassBorder),
+                  borderSide: BorderSide(color: glassBorderOf(context)),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(18),
-                  borderSide: const BorderSide(color: kGlassBorder),
+                  borderSide: BorderSide(color: glassBorderOf(context)),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(18),
@@ -436,9 +436,16 @@ class _MessageBubble extends StatelessWidget {
                   vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  color: isUser ? accent : const Color(0xE61E2438),
+                  color: isUser
+                      ? accent
+                      : context.watch<SettingsState>().uiStyle ==
+                            AppUiStyle.vscode
+                      ? const Color(0xFF2D2D2D)
+                      : const Color(0xE61E2438),
                   borderRadius: BorderRadius.circular(kRadiusMd),
-                  border: isUser ? null : Border.all(color: kGlassBorder),
+                  border: isUser
+                      ? null
+                      : Border.all(color: glassBorderOf(context)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

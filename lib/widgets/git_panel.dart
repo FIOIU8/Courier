@@ -288,8 +288,8 @@ class _GitPanelState extends State<GitPanel> {
       height: 44,
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       alignment: Alignment.centerLeft,
       child: SegmentedButton<_GitPanelView>(
@@ -341,7 +341,7 @@ class _GitPanelState extends State<GitPanel> {
                   itemBuilder: (context, index) => _buildFileRow(files[index]),
                 ),
         ),
-        const Divider(height: 1, color: kGlassBorder),
+        const Divider(height: 1),
         _buildDiffMode(),
         Expanded(
           child: diff == null || diff.diff.isEmpty
@@ -396,7 +396,7 @@ class _GitPanelState extends State<GitPanel> {
                       _buildCommitRow(entries[index]),
                 ),
         ),
-        const Divider(height: 1, color: kGlassBorder),
+        const Divider(height: 1),
         // 提交详情默认隐藏；右键点击提交弹出，可拖动上边缘调整占用高度
         if (_detailExpanded && _selectedCommitHash != null)
           SizedBox(
@@ -450,7 +450,7 @@ class _GitPanelState extends State<GitPanel> {
     final accentLight = accentLightOf(context);
     return Material(
       key: ValueKey('git-commit-${entry.fullHash}'),
-      color: selected ? kGlassSelectedBg : Colors.transparent,
+      color: selected ? glassSelectedBgOf(context) : Colors.transparent,
       child: InkWell(
         onTap: () => _loadCommitDetail(entry),
         child: SizedBox(
@@ -645,9 +645,9 @@ class _GitPanelState extends State<GitPanel> {
     return Container(
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -659,7 +659,7 @@ class _GitPanelState extends State<GitPanel> {
                 value: selectedBranch,
                 isExpanded: true,
                 isDense: true,
-                dropdownColor: kGlassFloatBg,
+                dropdownColor: glassFloatBgOf(context),
                 hint: Text(
                   current.isEmpty ? '分支' : current,
                   maxLines: 1,
@@ -754,7 +754,7 @@ class _GitPanelState extends State<GitPanel> {
     final canUnstage = file.staged;
     final selected = file.path == _selectedPath;
     return Material(
-      color: selected ? kGlassSelectedBg : Colors.transparent,
+      color: selected ? glassSelectedBgOf(context) : Colors.transparent,
       child: InkWell(
         onTap: () => _loadDiff(
           file,

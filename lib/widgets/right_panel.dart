@@ -99,16 +99,16 @@ class _RightPanelState extends State<RightPanel> {
         // Tab 栏（组合按钮 segmented）
         Container(
           padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-          decoration: const BoxDecoration(
-            color: kGlassHeaderBg,
-            border: Border(bottom: BorderSide(color: kGlassBorder)),
+          decoration: BoxDecoration(
+            color: glassHeaderBgOf(context),
+            border: Border(bottom: BorderSide(color: glassBorderOf(context))),
           ),
           child: Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
               color: kGlassChipBg,
               borderRadius: BorderRadius.circular(kRadiusMd),
-              border: Border.all(color: kGlassBorder),
+              border: Border.all(color: glassBorderOf(context)),
             ),
             child: Row(
               children: [
@@ -207,7 +207,7 @@ class _RightPanelState extends State<RightPanel> {
                       child: _isDragOver
                           ? Container(
                               key: const ValueKey('drag-overlay'),
-                              color: kGlassSelectedBg,
+                              color: glassSelectedBgOf(context),
                               child: Center(
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
@@ -215,7 +215,7 @@ class _RightPanelState extends State<RightPanel> {
                                     vertical: 16,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: kGlassFloatBg,
+                                    color: glassFloatBgOf(context),
                                     borderRadius: BorderRadius.circular(
                                       kRadiusLg,
                                     ),

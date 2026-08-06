@@ -36,9 +36,9 @@ class EditorPanel extends StatelessWidget {
     if (ws.documents.isEmpty) {
       return Container(
         height: 36,
-        decoration: const BoxDecoration(
-          color: Color(0xFF111827),
-          border: Border(bottom: BorderSide(color: Color(0xFF1E2438))),
+        decoration: BoxDecoration(
+          color: glassHeaderBgOf(context),
+          border: Border(bottom: BorderSide(color: glassBorderOf(context))),
         ),
         child: Row(
           children: [
@@ -65,9 +65,9 @@ class EditorPanel extends StatelessWidget {
 
     return Container(
       height: 36,
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(bottom: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(bottom: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -142,9 +142,9 @@ class EditorPanel extends StatelessWidget {
     return Container(
       height: 24,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: const BoxDecoration(
-        color: kGlassHeaderBg,
-        border: Border(top: BorderSide(color: kGlassBorder)),
+      decoration: BoxDecoration(
+        color: glassHeaderBgOf(context),
+        border: Border(top: BorderSide(color: glassBorderOf(context))),
       ),
       child: Row(
         children: [
@@ -416,9 +416,9 @@ class _EditorContentState extends State<_EditorContent> {
         Container(
           height: 32,
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: const BoxDecoration(
-            color: kGlassHeaderBg,
-            border: Border(bottom: BorderSide(color: kGlassBorder)),
+          decoration: BoxDecoration(
+            color: glassHeaderBgOf(context),
+            border: Border(bottom: BorderSide(color: glassBorderOf(context))),
           ),
           child: Row(
             children: [

@@ -106,55 +106,145 @@ class OfficialAIProviderClient implements AIProviderClient {
 
   @override
   Future<List<AIModelOption>> listModels(String apiKey) async {
-    HttpClientRequest? request;
-    try {
-      request = await _client.getUrl(baseUri.resolve('models'));
-      _applyHeaders(request, apiKey, stream: false);
-      final response = await request.close().timeout(_responseTimeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw await _responseException(response);
-      }
-      final body = await _readTextBody(response, _maxModelBodyBytes);
-      final decoded = jsonDecode(body);
-      if (decoded is! Map<String, dynamic> || decoded['data'] is! List) {
-        throw const CourierException(
-          'INVALID_PROVIDER_RESPONSE',
-          '供应商返回了无法识别的模型列表',
-        );
-      }
-      final models = <AIModelOption>[];
-      for (final item in decoded['data'] as List<dynamic>) {
-        if (item is! Map<String, dynamic>) continue;
-        final modelId = item['id'];
-        if (modelId is String && modelId.trim().isNotEmpty) {
-          final display = item['display_name'];
-          models.add(
-            AIModelOption(
-              id: modelId,
-              displayName: display is String && display.trim().isNotEmpty
-                  ? display
-                  : modelId,
-            ),
-          );
-        }
-      }
-      models.sort((a, b) => a.displayName.compareTo(b.displayName));
-      return models;
-    } on CourierException {
-      rethrow;
-    } on FormatException {
+    if (protocol == ProviderProtocol.anthropicCompatible) {
       throw const CourierException(
-        'INVALID_PROVIDER_RESPONSE',
-        '供应商返回了无法识别的模型列表',
+        'MODELS_NOT_SUPPORTED',
+        '该供应商不支持自动获取模型列表，请手动输入模型标识',
       );
-    } on TimeoutException {
-      request?.abort();
-      throw const CourierException('PROVIDER_TIMEOUT', '供应商响应超时');
-    } on SocketException {
-      throw const CourierException('PROVIDER_UNREACHABLE', '无法连接供应商');
-    } on HttpException {
-      throw const CourierException('PROVIDER_CONNECTION_FAILED', '供应商连接异常');
     }
+
+    final paths = <Uri>[baseUri.resolve('models')];
+    if (!baseUri.path.contains('/v1/')) {
+      paths.add(baseUri.resolve('v1/models'));
+    }
+
+    CourierException? lastError;
+    for (final path in paths) {
+      HttpClientRequest? request;
+      String? body;
+      try {
+        request = await _client.getUrl(path);
+        _applyHeaders(request, apiKey, stream: false);
+        final response = await request.close().timeout(_responseTimeout);
+
+        if (response.statusCode == 404 || response.statusCode == 405) {
+          lastError = await _responseException(response);
+          continue;
+        }
+
+        // 其他 HTTP 错误（如 401/403）立即抛出，直接透出 API 返回的错误
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw await _responseException(response);
+        }
+
+        body = await _readTextBody(response, _maxModelBodyBytes);
+        final decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          lastError = CourierException(
+            'INVALID_PROVIDER_RESPONSE',
+            _formatParseError(body),
+          );
+          continue;
+        }
+        final models = _extractModels(decoded, body);
+        if (models.isEmpty) {
+          lastError = CourierException(
+            'INVALID_PROVIDER_RESPONSE',
+            '未找到有效模型条目（响应摘要: ${_sanitizeSummary(body, 200)}）',
+          );
+          continue;
+        }
+        models.sort((a, b) => a.displayName.compareTo(b.displayName));
+        return models;
+      } on CourierException catch (error) {
+        // 解析类错误（INVALID_PROVIDER_RESPONSE）记录后尝试下一个路径；
+        // HTTP 错误（401/403 等）与认证错误立即抛出
+        if (error.code.startsWith('PROVIDER_HTTP_')) {
+          rethrow;
+        }
+        lastError = error;
+      } on FormatException {
+        lastError = CourierException(
+          'INVALID_PROVIDER_RESPONSE',
+          body == null
+              ? '供应商返回了无法识别的模型列表，请检查 Base API 地址与 API Key 是否正确'
+              : _formatParseError(body),
+        );
+      } on TimeoutException {
+        request?.abort();
+        throw const CourierException('PROVIDER_TIMEOUT', '供应商响应超时');
+      } on SocketException {
+        throw const CourierException('PROVIDER_UNREACHABLE', '无法连接供应商');
+      } on HttpException {
+        throw const CourierException('PROVIDER_CONNECTION_FAILED', '供应商连接异常');
+      }
+    }
+
+    throw lastError ??
+        const CourierException(
+          'INVALID_PROVIDER_RESPONSE',
+          '供应商返回了无法识别的模型列表，请检查 Base API 地址与 API Key 是否正确',
+        );
+  }
+
+  static List<AIModelOption> _extractModels(
+    Map<String, dynamic> decoded,
+    String rawBody,
+  ) {
+    List<dynamic>? modelList;
+    if (decoded['data'] is List) {
+      modelList = decoded['data'] as List<dynamic>;
+    } else if (decoded['models'] is List) {
+      modelList = decoded['models'] as List<dynamic>;
+    } else if (decoded['data'] is Map<String, dynamic>) {
+      final innerData = decoded['data'] as Map<String, dynamic>;
+      if (innerData['models'] is List) {
+        modelList = innerData['models'] as List<dynamic>;
+      }
+    }
+
+    if (modelList == null) {
+      throw CourierException(
+        'INVALID_PROVIDER_RESPONSE',
+        _formatParseError(rawBody),
+      );
+    }
+
+    final models = <AIModelOption>[];
+    for (final item in modelList) {
+      if (item is! Map<String, dynamic>) continue;
+      final modelId = (item['id'] as String?)?.trim();
+      if (modelId == null || modelId.isEmpty) continue;
+      final displayName = _readOptionalDisplayName(item) ?? modelId;
+      models.add(AIModelOption(id: modelId, displayName: displayName));
+    }
+    return models;
+  }
+
+  static String? _readOptionalDisplayName(Map<String, dynamic> item) {
+    for (final key in ['display_name', 'displayName', 'name']) {
+      final value = item[key];
+      if (value is String && value.trim().isNotEmpty) return value.trim();
+    }
+    return null;
+  }
+
+  static String _sanitizeSummary(String body, int maxLength) {
+    final sanitized = ErrorSanitizer.redact(body, maxLength: maxLength);
+    return sanitized.length < body.length ? '$sanitized...' : sanitized;
+  }
+
+  static String _formatParseError(String rawBody) {
+    final summary = _sanitizeSummary(rawBody, 200);
+    if (_looksLikeHtml(rawBody)) {
+      return '请求未到达 API 端点（返回了网页内容而非 JSON），请检查 Base API 地址是否正确（响应摘要: $summary）';
+    }
+    return '供应商返回了无法识别的模型列表（响应摘要: $summary）';
+  }
+
+  static bool _looksLikeHtml(String body) {
+    final trimmed = body.trimLeft().toLowerCase();
+    return trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
   }
 
   @override
@@ -394,19 +484,29 @@ class OfficialAIProviderClient implements AIProviderClient {
       bytes.addAll(chunk.take(remaining));
     }
     var message = '供应商请求失败，状态码 ${response.statusCode}';
-    if (bytes.isNotEmpty) {
+    var extracted = false;
+    final raw = utf8.decode(bytes, allowMalformed: true);
+    if (raw.trim().isNotEmpty) {
       try {
-        final decoded = jsonDecode(utf8.decode(bytes, allowMalformed: true));
+        final decoded = jsonDecode(raw);
         if (decoded is Map<String, dynamic>) {
           final error = decoded['error'];
           if (error is Map<String, dynamic> && error['message'] is String) {
             message = error['message'] as String;
+            extracted = true;
+          } else if (error is String && error.trim().isNotEmpty) {
+            message = error;
+            extracted = true;
           } else if (decoded['message'] is String) {
             message = decoded['message'] as String;
+            extracted = true;
           }
         }
-      } catch (_) {
-        // The status code remains sufficient when the body is not JSON.
+      } on FormatException {
+        // 非 JSON 响应体，走下方响应摘要透出。
+      }
+      if (!extracted) {
+        message = '$message（响应: ${_sanitizeSummary(raw, 200)}）';
       }
     }
     return CourierException(

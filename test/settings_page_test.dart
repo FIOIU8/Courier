@@ -1,13 +1,16 @@
 // settings_page_test.dart - 设置页渲染测试。
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:courier_flutter/services/app_error.dart';
 import 'package:courier_flutter/services/app_logger.dart';
 import 'package:courier_flutter/services/ai_service.dart';
 import 'package:courier_flutter/services/courier_service.dart';
+import 'package:courier_flutter/services/models.dart';
 import 'package:courier_flutter/services/safe_file_system.dart';
 import 'package:courier_flutter/services/secure_storage_service.dart';
 import 'package:courier_flutter/services/settings_state.dart';
@@ -270,4 +273,279 @@ void main() {
     expect(settled, isEmpty, reason: '切换完成后应静止原位');
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('未保存Key时点击读取模型列表显示提示且不发请求', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.pumpAndSettle();
+    expect(find.text('请先保存 API Key 再读取模型列表'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MODELS_NOT_SUPPORTED时显示手动添加提示', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.saveApiKey('test-key');
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {
+          'openai': _ThrowingListModelsProvider(),
+        },
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.pumpAndSettle();
+    expect(find.text('该供应商不支持自动获取，可在下方手动添加模型'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('读取模型列表失败时界面直接展示API返回的错误', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.saveApiKey('test-key');
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {
+          'openai': _ThrowingListModelsProvider(
+            error: const CourierException(
+              'PROVIDER_HTTP_401',
+              'Authentication Fails, Your api key is invalid',
+            ),
+          ),
+        },
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Authentication Fails, Your api key is invalid'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('CourierException'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('错误提示可复制完整内容到剪贴板', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.saveApiKey('test-key');
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {
+          'openai': _ThrowingListModelsProvider(
+            error: const CourierException(
+              'PROVIDER_HTTP_401',
+              'Authentication Fails, Your api key is invalid',
+            ),
+          ),
+        },
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    final clipboardCalls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        clipboardCalls.add(call);
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('复制错误信息'));
+    await tester.pump();
+
+    final copyCall = clipboardCalls
+        .where((call) => call.method == 'Clipboard.setData')
+        .single;
+    final arguments = copyCall.arguments as Map<Object?, Object?>;
+    expect(
+      arguments['text'],
+      'Authentication Fails, Your api key is invalid',
+    );
+    expect(find.byIcon(Icons.check), findsOneWidget, reason: '复制后应显示对勾反馈');
+    // 推进时间让复制反馈的 2 秒计时器完成
+    await tester.pump(const Duration(seconds: 2));
+    expect(tester.takeException(), isNull);
+  });
+}
+
+class _ThrowingListModelsProvider extends FakeAIProviderClient {
+  final CourierException error;
+
+  _ThrowingListModelsProvider({
+    this.error = const CourierException(
+      'MODELS_NOT_SUPPORTED',
+      '该供应商不支持自动获取模型列表，请手动输入模型标识',
+    ),
+  });
+
+  @override
+  Future<List<AIModelOption>> listModels(String apiKey) async {
+    throw error;
+  }
 }

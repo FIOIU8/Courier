@@ -200,6 +200,13 @@ class StubHttpClientResponse extends Fake implements HttpClientResponse {
        _body = Stream<List<int>>.value(utf8.encode(body));
 
   @override
+  Future<E> drain<E>([E? futureValue]) async {
+    await for (final _ in _body) {}
+    if (futureValue != null) return futureValue;
+    return null as E;
+  }
+
+  @override
   StreamSubscription<List<int>> listen(
     void Function(List<int>)? onData, {
     Function? onError,

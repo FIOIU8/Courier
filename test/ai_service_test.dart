@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:courier_flutter/services/ai_service.dart';
+import 'package:courier_flutter/services/app_error.dart';
 import 'package:courier_flutter/services/app_logger.dart';
 import 'package:courier_flutter/services/models.dart';
 import 'package:courier_flutter/services/secure_storage_service.dart';
@@ -347,5 +348,250 @@ void main() {
     await settings.deleteCustomProvider(provider.id);
     expect(service.options.providers.single.id, 'openai');
     expect(createdClients.last.disposed, isTrue);
+  });
+
+  // ---- OfficialAIProviderClient.listModels 测试 ----
+
+  test('Anthropic协议listModels不发起HTTP请求并抛MODELS_NOT_SUPPORTED', () async {
+    final httpClient = RecordingHttpClient(responses: []);
+    final client = OfficialAIProviderClient.anthropic(client: httpClient);
+    addTearDown(client.dispose);
+
+    await expectLater(
+      client.listModels('any-key'),
+      throwsCourierCode('MODELS_NOT_SUPPORTED'),
+    );
+    expect(httpClient.requests, isEmpty);
+  });
+
+  test('listModels解析data格式（现有格式）', () async {
+    final response = StubHttpClientResponse(
+      body: jsonEncode({
+        'data': [
+          {'id': 'm1', 'display_name': 'Model 1'},
+        ],
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient.openAI(client: httpClient);
+    addTearDown(client.dispose);
+
+    final models = await client.listModels('key');
+    expect(models, hasLength(1));
+    expect(models.first.id, 'm1');
+    expect(models.first.displayName, 'Model 1');
+  });
+
+  test('listModels解析models格式（部分中转站）', () async {
+    final response = StubHttpClientResponse(
+      body: jsonEncode({
+        'models': [
+          {'id': 'm2', 'displayName': 'Model 2'},
+        ],
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient.openAI(client: httpClient);
+    addTearDown(client.dispose);
+
+    final models = await client.listModels('key');
+    expect(models, hasLength(1));
+    expect(models.first.id, 'm2');
+    expect(models.first.displayName, 'Model 2');
+  });
+
+  test('listModels解析data.models嵌套格式', () async {
+    final response = StubHttpClientResponse(
+      body: jsonEncode({
+        'data': {
+          'models': [
+            {'id': 'm3', 'name': 'Model 3'},
+          ],
+        },
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient.openAI(client: httpClient);
+    addTearDown(client.dispose);
+
+    final models = await client.listModels('key');
+    expect(models, hasLength(1));
+    expect(models.first.id, 'm3');
+    expect(models.first.displayName, 'Model 3');
+  });
+
+  test('主路径404时回退到v1/models', () async {
+    final notFound = StubHttpClientResponse(statusCode: 404);
+    final success = StubHttpClientResponse(
+      body: jsonEncode({
+        'data': [
+          {'id': 'fallback-model'},
+        ],
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [notFound, success]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://api.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final models = await client.listModels('key');
+    expect(models, hasLength(1));
+    expect(models.first.id, 'fallback-model');
+    expect(httpClient.requests, hasLength(2));
+    expect(
+      httpClient.requests[0].uri,
+      Uri.parse('https://api.example.com/models'),
+    );
+    expect(
+      httpClient.requests[1].uri,
+      Uri.parse('https://api.example.com/v1/models'),
+    );
+  });
+
+  test('listModels跳过无id字段的条目', () async {
+    final response = StubHttpClientResponse(
+      body: jsonEncode({
+        'data': [
+          {'display_name': 'No ID'},
+          {'id': '', 'display_name': 'Empty ID'},
+          {'id': 'valid-model', 'display_name': 'Valid'},
+        ],
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient.openAI(client: httpClient);
+    addTearDown(client.dispose);
+
+    final models = await client.listModels('key');
+    expect(models, hasLength(1));
+    expect(models.first.id, 'valid-model');
+  });
+
+  test('listModels失败时透出API返回的错误消息', () async {
+    final response = StubHttpClientResponse(
+      statusCode: 401,
+      body: jsonEncode({
+        'error': {'message': 'Authentication Fails, Your api key is invalid'},
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient.openAI(client: httpClient);
+    addTearDown(client.dispose);
+
+    await expectLater(
+      client.listModels('bad-key'),
+      throwsA(
+        isA<CourierException>().having(
+          (error) => error.message,
+          'message',
+          'Authentication Fails, Your api key is invalid',
+        ),
+      ),
+    );
+  });
+
+  test('listModels失败时错误信息携带状态码与响应摘要', () async {
+    final response = StubHttpClientResponse(
+      statusCode: 403,
+      body: 'forbidden by upstream relay',
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient.openAI(client: httpClient);
+    addTearDown(client.dispose);
+
+    await expectLater(
+      client.listModels('bad-key'),
+      throwsA(
+        isA<CourierException>().having(
+          (error) => error.message,
+          'message',
+          contains('状态码 403'),
+        ),
+      ),
+    );
+  });
+
+  test('Base URL 拼接不产生双斜杠', () async {
+    const base = 'https://www.example.com/';
+    final uri = Uri.parse(base);
+    expect(
+      uri.resolve('models').toString(),
+      'https://www.example.com/models',
+    );
+    expect(
+      uri.resolve('v1/models').toString(),
+      'https://www.example.com/v1/models',
+    );
+    final uriV1 = Uri.parse('https://www.example.com/v1/');
+    expect(
+      uriV1.resolve('models').toString(),
+      'https://www.example.com/v1/models',
+    );
+  });
+
+  test('主路径返回网页时回退到v1/models成功', () async {
+    final htmlPage = StubHttpClientResponse(
+      body: '<!doctype html><html><head><title>Home</title></head></html>',
+    );
+    final success = StubHttpClientResponse(
+      body: jsonEncode({
+        'data': [
+          {'id': 'html-fallback-model'},
+        ],
+      }),
+    );
+    final httpClient = RecordingHttpClient(responses: [htmlPage, success]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://www.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final models = await client.listModels('key');
+    expect(models, hasLength(1));
+    expect(models.first.id, 'html-fallback-model');
+    expect(httpClient.requests, hasLength(2));
+    expect(
+      httpClient.requests[0].uri,
+      Uri.parse('https://www.example.com/models'),
+    );
+    expect(
+      httpClient.requests[1].uri,
+      Uri.parse('https://www.example.com/v1/models'),
+    );
+  });
+
+  test('所有路径均返回网页时提示检查Base API地址', () async {
+    StubHttpClientResponse htmlPage() => StubHttpClientResponse(
+      body: '<!doctype html><html><head><title>Home</title></head></html>',
+    );
+    final httpClient = RecordingHttpClient(responses: [htmlPage(), htmlPage()]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://www.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    await expectLater(
+      client.listModels('key'),
+      throwsA(
+        isA<CourierException>().having(
+          (error) => error.message,
+          'message',
+          contains('请求未到达 API 端点'),
+        ),
+      ),
+    );
   });
 }

@@ -4,9 +4,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../services/app_error.dart';
 import '../services/app_logger.dart';
 import '../services/courier_service.dart';
 import '../services/models.dart';
@@ -49,6 +51,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _savingProvider = false;
   List<AIModelOption> _availableModels = const [];
   String? _error;
+  bool _errorCopied = false;
 
   @override
   void didChangeDependencies() {
@@ -91,6 +94,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _refreshModels() async {
+    final settings = context.read<SettingsState>();
+    if (!settings.apiKeyConfigured) {
+      _showError('请先保存 API Key 再读取模型列表');
+      return;
+    }
+
     setState(() {
       _loadingModels = true;
       _error = null;
@@ -98,6 +107,13 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final models = await context.read<CourierService>().refreshAIModels();
       if (mounted) setState(() => _availableModels = models);
+    } on CourierException catch (error) {
+      // 直接展示 API 返回的错误信息（如 "Authentication Fails, Your api key is invalid"）
+      _showError(
+        error.code == 'MODELS_NOT_SUPPORTED'
+            ? '该供应商不支持自动获取，可在下方手动添加模型'
+            : error.message,
+      );
     } catch (error) {
       _showError(error);
     } finally {
@@ -268,7 +284,21 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _showError(Object error) {
     if (!mounted) return;
-    setState(() => _error = '$error');
+    setState(() {
+      _error = '$error';
+      _errorCopied = false;
+    });
+  }
+
+  /// 复制错误信息到剪贴板，成功后短暂显示对勾反馈。
+  Future<void> _copyError() async {
+    final error = _error;
+    if (error == null || _errorCopied) return;
+    await Clipboard.setData(ClipboardData(text: error));
+    if (!mounted) return;
+    setState(() => _errorCopied = true);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (mounted) setState(() => _errorCopied = false);
   }
 
   Future<void> _applySetting(Future<void> Function() update) async {
@@ -395,18 +425,20 @@ class _SettingsPageState extends State<SettingsPage> {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             color: const Color(0x1AEF4444),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(
-                  Icons.error_outline,
-                  size: 15,
-                  color: Color(0xFFEF4444),
+                const Padding(
+                  padding: EdgeInsets.only(top: 2),
+                  child: Icon(
+                    Icons.error_outline,
+                    size: 15,
+                    color: Color(0xFFEF4444),
+                  ),
                 ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     _error!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFFFCA5A5),
@@ -414,8 +446,31 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 IconButton(
+                  tooltip: '复制错误信息',
+                  onPressed: _copyError,
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 28,
+                    height: 28,
+                  ),
+                  icon: Icon(
+                    _errorCopied ? Icons.check : Icons.copy,
+                    size: 14,
+                    color: _errorCopied
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFFFCA5A5),
+                  ),
+                ),
+                IconButton(
                   tooltip: '关闭错误提示',
                   onPressed: () => setState(() => _error = null),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 28,
+                    height: 28,
+                  ),
                   icon: const Icon(Icons.close, size: 14),
                 ),
               ],

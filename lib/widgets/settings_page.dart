@@ -287,6 +287,8 @@ class _SettingsPageState extends State<SettingsPage> {
               dense: true,
               selected: _activeSection == index,
               selectedTileColor: glassSelectedBgOf(context),
+              // 选中态图标/文字保持中性（不跟随主题强调色）
+              selectedColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(kRadiusSm),
               ),

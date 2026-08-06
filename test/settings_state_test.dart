@@ -676,4 +676,105 @@ void main() {
     await settings.setUiStyle(AppUiStyle.material3);
     await settings.setBackgroundOpacity(SettingsState.defaultBackgroundOpacity);
   });
+
+  test('模糊强度/透明度：persist:false 实时更新内存但不写盘', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    final prefs = await SharedPreferences.getInstance();
+
+    // 模糊强度：拖动实时更新内存，未持久化
+    await settings.setBlurSigma(20, persist: false);
+    expect(settings.blurSigma, 20);
+    expect(prefs.getDouble('blur_sigma'), isNull, reason: 'persist:false 不应写盘');
+
+    // 松手持久化
+    await settings.setBlurSigma(8);
+    expect(settings.blurSigma, 8);
+    expect(prefs.getDouble('blur_sigma'), 8);
+
+    // 透明度：同上
+    await settings.setBackgroundOpacity(0.5, persist: false);
+    expect(settings.backgroundOpacity, 0.5);
+    expect(
+      prefs.getDouble('theme_background_opacity'),
+      isNull,
+      reason: 'persist:false 不应写盘',
+    );
+    await settings.setBackgroundOpacity(0.7);
+    expect(settings.backgroundOpacity, 0.7);
+    expect(prefs.getDouble('theme_background_opacity'), 0.7);
+
+    // persist:false 仍拒绝越界值
+    await expectLater(
+      settings.setBackgroundOpacity(1.5, persist: false),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+  });
+
+  test('背景图片历史：加入、去重置顶、上限截断与重载保留', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.backgroundImageHistory, isEmpty);
+
+    // 依次设置，最新在前；重复路径去重置顶
+    await settings.setBackgroundImagePath('a.png');
+    await settings.setBackgroundImagePath('b.png');
+    await settings.setBackgroundImagePath('a.png');
+    expect(settings.backgroundImagePath, 'a.png');
+    expect(settings.backgroundImageHistory, ['a.png', 'b.png']);
+
+    // 上限截断：保留最新的 N 条
+    for (var i = 0; i < SettingsState.maxBackgroundImageHistory; i++) {
+      await settings.setBackgroundImagePath('img-$i.png');
+    }
+    expect(
+      settings.backgroundImageHistory,
+      hasLength(SettingsState.maxBackgroundImageHistory),
+    );
+    expect(
+      settings.backgroundImageHistory.first,
+      'img-${SettingsState.maxBackgroundImageHistory - 1}.png',
+    );
+
+    // 清空背景不清除历史
+    await settings.setBackgroundImagePath('');
+    expect(settings.backgroundImagePath, isEmpty);
+    expect(settings.backgroundImageHistory, isNotEmpty);
+
+    // 重载后保留
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.backgroundImageHistory, settings.backgroundImageHistory);
+  });
+
+  test('背景图片历史读盘过滤非法项并去重', () async {
+    SharedPreferences.setMockInitialValues({
+      'theme_background_image_history': jsonEncode([
+        'valid.png',
+        'bad\u0000path', // 含控制字符 → 丢弃
+        'x' * (SettingsState.maxBackgroundImagePathLength + 1), // 超长 → 丢弃
+        42, // 非字符串 → 丢弃
+        'valid.png', // 重复 → 去重
+      ]),
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.backgroundImageHistory, ['valid.png']);
+  });
 }

@@ -35,6 +35,9 @@ class SettingsState extends ChangeNotifier {
   /// 背景图片默认透明度
   static const double defaultBackgroundOpacity = 0.35;
 
+  /// 背景图片历史记录上限
+  static const int maxBackgroundImageHistory = 8;
+
   /// 默认强调色（teal，对齐原项目主色调）
   static const int defaultAccentColorValue = 0xFF23B8A4;
 
@@ -98,6 +101,9 @@ class SettingsState extends ChangeNotifier {
 
   /// UI 样式（Material 3 / VSCode）
   AppUiStyle _uiStyle = AppUiStyle.material3;
+
+  /// 最近使用过的背景图片路径（最新在前，上限 [maxBackgroundImageHistory]）
+  List<String> _backgroundImageHistory = const [];
   bool _loaded = false;
 
   SettingsState({
@@ -156,6 +162,10 @@ class SettingsState extends ChangeNotifier {
 
   /// UI 样式（Material 3 / VSCode）
   AppUiStyle get uiStyle => _uiStyle;
+
+  /// 最近使用过的背景图片路径（不可变视图，最新在前）
+  List<String> get backgroundImageHistory =>
+      List<String>.unmodifiable(_backgroundImageHistory);
 
   /// 当前强调色（自定义主题）
   Color get accentColor => Color(_accentColorValue);
@@ -283,6 +293,9 @@ class SettingsState extends ChangeNotifier {
       1.0,
     );
     _uiStyle = _parseUiStyle(preferences.getString('theme_ui_style'));
+    _backgroundImageHistory = _readBackgroundImageHistory(
+      preferences.getString('theme_background_image_history'),
+    );
     _apiKeyConfigured = await secureStorage.hasApiKey(_aiProviderId);
     _loaded = true;
     notifyListeners();
@@ -704,38 +717,79 @@ class SettingsState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 设置毛玻璃模糊强度（0~30）
-  Future<void> setBlurSigma(double value) async {
+  /// 设置毛玻璃模糊强度（0~30）。
+  /// [persist] 为 false 时仅更新内存并通知（用于滑杆拖动实时渲染），不写盘。
+  /// [persist] 为 true 时始终写盘：拖动实时更新内存后，松手回调的值与内存
+  /// 相同，必须照常持久化（否则本次调整会丢失），值未变时不再重复通知。
+  Future<void> setBlurSigma(double value, {bool persist = true}) async {
     final clamped = _boundedDouble(value, 0.0, 30.0);
+    if (persist) {
+      await _persist(
+        (preferences) => preferences.setDouble('blur_sigma', clamped),
+      );
+      if (clamped != _blurSigma) {
+        _blurSigma = clamped;
+        notifyListeners();
+      }
+      return;
+    }
     if (clamped == _blurSigma) return;
-    await _persist(
-      (preferences) => preferences.setDouble('blur_sigma', clamped),
-    );
     _blurSigma = clamped;
     notifyListeners();
   }
 
   /// 设置背景图片路径；空字符串清除背景图。
   /// 非法路径（超长或含控制字符）按空值处理。
+  /// 非空路径会记入"最近使用"历史（去重、最新在前、上限 [maxBackgroundImageHistory]）。
   Future<void> setBackgroundImagePath(String value) async {
     final path = _readBackgroundImagePath(value);
     if (path == _backgroundImagePath) return;
-    await _persist(
-      (preferences) => preferences.setString('theme_background_image', path),
-    );
+    final history = path.isEmpty
+        ? _backgroundImageHistory
+        : _withHistoryEntry(_backgroundImageHistory, path);
+    await _persist((preferences) async {
+      if (!await preferences.setString('theme_background_image', path)) {
+        return false;
+      }
+      if (path.isNotEmpty &&
+          !await preferences.setString(
+            'theme_background_image_history',
+            jsonEncode(history),
+          )) {
+        return false;
+      }
+      return true;
+    });
     _backgroundImagePath = path;
+    if (path.isNotEmpty) {
+      _backgroundImageHistory = List<String>.unmodifiable(history);
+    }
     notifyListeners();
   }
 
-  /// 设置背景图片透明度（0.0–1.0）
-  Future<void> setBackgroundOpacity(double value) async {
+  /// 设置背景图片透明度（0.0–1.0）。
+  /// [persist] 为 false 时仅更新内存并通知（用于滑杆拖动实时渲染），不写盘。
+  /// [persist] 为 true 时始终写盘：拖动实时更新内存后，松手回调的值与内存
+  /// 相同，必须照常持久化（否则本次调整会丢失），值未变时不再重复通知。
+  Future<void> setBackgroundOpacity(
+    double value, {
+    bool persist = true,
+  }) async {
     if (!value.isFinite || value < 0.0 || value > 1.0) {
       throw const CourierException('INVALID_SETTING', '背景图片透明度必须位于 0.0 到 1.0');
     }
+    if (persist) {
+      await _persist(
+        (preferences) =>
+            preferences.setDouble('theme_background_opacity', value),
+      );
+      if (value != _backgroundOpacity) {
+        _backgroundOpacity = value;
+        notifyListeners();
+      }
+      return;
+    }
     if (value == _backgroundOpacity) return;
-    await _persist(
-      (preferences) => preferences.setDouble('theme_background_opacity', value),
-    );
     _backgroundOpacity = value;
     notifyListeners();
   }
@@ -1001,5 +1055,34 @@ class SettingsState extends ChangeNotifier {
       (style) => style.name == value?.trim().toLowerCase(),
       orElse: () => AppUiStyle.material3,
     );
+  }
+
+  /// 把 [entry] 置顶加入历史：去重、截断到上限（返回不可变视图）
+  static List<String> _withHistoryEntry(List<String> history, String entry) {
+    return List<String>.unmodifiable(
+      [entry, ...history.where((item) => item != entry)]
+          .take(maxBackgroundImageHistory),
+    );
+  }
+
+  /// 读取背景图片历史：逐项校验路径合法性、去重、截断到上限；
+  /// 非法或损坏数据安全回退为空。
+  static List<String> _readBackgroundImageHistory(String? value) {
+    if (value == null || value.trim().isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! List) return const [];
+      final history = <String>[];
+      final seen = <String>{};
+      for (final item in decoded.take(maxBackgroundImageHistory)) {
+        if (item is! String) continue;
+        final path = _readBackgroundImagePath(item);
+        if (path.isEmpty || !seen.add(path)) continue;
+        history.add(path);
+      }
+      return List<String>.unmodifiable(history);
+    } on FormatException {
+      return const [];
+    }
   }
 }

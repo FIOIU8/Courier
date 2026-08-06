@@ -90,7 +90,7 @@ class SecureStorageService {
   String _validateProvider(String providerId) {
     final value = providerId.trim().toLowerCase();
     if (!RegExp(r'^[a-z][a-z0-9_-]{1,31}$').hasMatch(value)) {
-      throw const CourierException('INVALID_PROVIDER', 'AI Provider 标识无效');
+      throw const CourierException('INVALID_PROVIDER', '供应商标识无效');
     }
     return value;
   }

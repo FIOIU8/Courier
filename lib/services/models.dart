@@ -98,15 +98,170 @@ class AIModelOption {
   const AIModelOption({required this.id, required this.displayName});
 }
 
+enum ProviderProtocol { openaiCompatible, anthropicCompatible }
+
+class CustomAIProvider {
+  static final RegExp idPattern = RegExp(r'^[a-z][a-z0-9_-]{1,31}$');
+  static final RegExp _controlCharacters = RegExp(r'[\x00-\x1f\x7f]');
+  static const int maxDisplayNameLength = 80;
+  static const int maxBaseUrlLength = 2048;
+
+  final String id;
+  final String displayName;
+  final String baseUrl;
+  final ProviderProtocol protocol;
+  final bool supportsMillionContext;
+  final DateTime createdAt;
+
+  factory CustomAIProvider({
+    required String id,
+    required String displayName,
+    required String baseUrl,
+    required ProviderProtocol protocol,
+    required bool supportsMillionContext,
+    required DateTime createdAt,
+  }) {
+    final normalizedId = id.trim().toLowerCase();
+    if (!idPattern.hasMatch(normalizedId)) {
+      throw const FormatException('Invalid provider id');
+    }
+
+    final normalizedDisplayName = displayName.trim();
+    if (normalizedDisplayName.isEmpty ||
+        normalizedDisplayName.length > maxDisplayNameLength ||
+        _controlCharacters.hasMatch(normalizedDisplayName)) {
+      throw const FormatException('Invalid provider display name');
+    }
+
+    return CustomAIProvider._(
+      id: normalizedId,
+      displayName: normalizedDisplayName,
+      baseUrl: normalizeBaseUrl(baseUrl),
+      protocol: protocol,
+      supportsMillionContext: supportsMillionContext,
+      createdAt: createdAt.toUtc(),
+    );
+  }
+
+  const CustomAIProvider._({
+    required this.id,
+    required this.displayName,
+    required this.baseUrl,
+    required this.protocol,
+    required this.supportsMillionContext,
+    required this.createdAt,
+  });
+
+  factory CustomAIProvider.fromJson(Map<String, dynamic> json) {
+    final protocolName = _requiredString(json, 'protocol');
+    final protocol = ProviderProtocol.values
+        .where((candidate) => candidate.name == protocolName)
+        .firstOrNull;
+    if (protocol == null) {
+      throw const FormatException('Invalid provider protocol');
+    }
+
+    final supportsMillionContext = json['supportsMillionContext'];
+    if (supportsMillionContext is! bool) {
+      throw const FormatException('Invalid million context setting');
+    }
+
+    final createdAt = DateTime.tryParse(_requiredString(json, 'createdAt'));
+    if (createdAt == null) {
+      throw const FormatException('Invalid provider creation time');
+    }
+
+    return CustomAIProvider(
+      id: _requiredString(json, 'id'),
+      displayName: _requiredString(json, 'displayName'),
+      baseUrl: _requiredString(json, 'baseUrl'),
+      protocol: protocol,
+      supportsMillionContext: supportsMillionContext,
+      createdAt: createdAt,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'displayName': displayName,
+    'baseUrl': baseUrl,
+    'protocol': protocol.name,
+    'supportsMillionContext': supportsMillionContext,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  CustomAIProvider copyWith({
+    String? displayName,
+    String? baseUrl,
+    ProviderProtocol? protocol,
+    bool? supportsMillionContext,
+  }) {
+    return CustomAIProvider(
+      id: id,
+      displayName: displayName ?? this.displayName,
+      baseUrl: baseUrl ?? this.baseUrl,
+      protocol: protocol ?? this.protocol,
+      supportsMillionContext:
+          supportsMillionContext ?? this.supportsMillionContext,
+      createdAt: createdAt,
+    );
+  }
+
+  static String normalizeBaseUrl(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty || normalized.length > maxBaseUrlLength) {
+      throw const FormatException('Invalid provider base URL length');
+    }
+
+    final uri = Uri.tryParse(normalized);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        !uri.hasAuthority ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.query.isNotEmpty ||
+        uri.fragment.isNotEmpty) {
+      throw const FormatException('Invalid provider base URL');
+    }
+
+    final path = uri.path.endsWith('/') ? uri.path : '${uri.path}/';
+    return uri.replace(path: path).toString();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is CustomAIProvider &&
+            id == other.id &&
+            displayName == other.displayName &&
+            baseUrl == other.baseUrl &&
+            protocol == other.protocol &&
+            supportsMillionContext == other.supportsMillionContext &&
+            createdAt == other.createdAt;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    displayName,
+    baseUrl,
+    protocol,
+    supportsMillionContext,
+    createdAt,
+  );
+}
+
 class AIProviderOption {
   final String id;
   final String displayName;
   final List<AIModelOption> models;
+  final bool supportsMillionContext;
 
   const AIProviderOption({
     required this.id,
     required this.displayName,
     this.models = const [],
+    this.supportsMillionContext = false,
   });
 }
 

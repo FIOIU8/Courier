@@ -51,6 +51,9 @@ abstract interface class AIProviderClient {
   void dispose();
 }
 
+typedef CustomAIProviderClientFactory =
+    AIProviderClient Function(CustomAIProvider provider);
+
 class OfficialAIProviderClient implements AIProviderClient {
   static const Duration _connectionTimeout = Duration(seconds: 20);
   static const Duration _responseTimeout = Duration(seconds: 90);
@@ -63,6 +66,7 @@ class OfficialAIProviderClient implements AIProviderClient {
   @override
   final String displayName;
   final Uri baseUri;
+  final ProviderProtocol protocol;
   final HttpClient _client;
   final Map<String, HttpClientRequest> _activeRequests = {};
   final Set<String> _cancelledRequests = {};
@@ -70,9 +74,12 @@ class OfficialAIProviderClient implements AIProviderClient {
   OfficialAIProviderClient({
     required this.id,
     required this.displayName,
-    required this.baseUri,
+    required Uri baseUri,
+    ProviderProtocol? protocol,
     HttpClient? client,
-  }) : _client = client ?? HttpClient() {
+  }) : baseUri = Uri.parse(CustomAIProvider.normalizeBaseUrl('$baseUri')),
+       protocol = protocol ?? _defaultProtocol(id),
+       _client = client ?? HttpClient() {
     _client.connectionTimeout = _connectionTimeout;
     _client.idleTimeout = _responseTimeout;
   }
@@ -82,6 +89,7 @@ class OfficialAIProviderClient implements AIProviderClient {
       id: 'openai',
       displayName: 'OpenAI',
       baseUri: Uri.parse('https://api.openai.com/v1/'),
+      protocol: ProviderProtocol.openaiCompatible,
       client: client,
     );
   }
@@ -91,6 +99,7 @@ class OfficialAIProviderClient implements AIProviderClient {
       id: 'anthropic',
       displayName: 'Anthropic',
       baseUri: Uri.parse('https://api.anthropic.com/v1/'),
+      protocol: ProviderProtocol.anthropicCompatible,
       client: client,
     );
   }
@@ -110,7 +119,7 @@ class OfficialAIProviderClient implements AIProviderClient {
       if (decoded is! Map<String, dynamic> || decoded['data'] is! List) {
         throw const CourierException(
           'INVALID_PROVIDER_RESPONSE',
-          'AI Provider 返回了无法识别的模型列表',
+          '供应商返回了无法识别的模型列表',
         );
       }
       final models = <AIModelOption>[];
@@ -136,18 +145,15 @@ class OfficialAIProviderClient implements AIProviderClient {
     } on FormatException {
       throw const CourierException(
         'INVALID_PROVIDER_RESPONSE',
-        'AI Provider 返回了无法识别的模型列表',
+        '供应商返回了无法识别的模型列表',
       );
     } on TimeoutException {
       request?.abort();
-      throw const CourierException('PROVIDER_TIMEOUT', 'AI Provider 响应超时');
+      throw const CourierException('PROVIDER_TIMEOUT', '供应商响应超时');
     } on SocketException {
-      throw const CourierException('PROVIDER_UNREACHABLE', '无法连接 AI Provider');
+      throw const CourierException('PROVIDER_UNREACHABLE', '无法连接供应商');
     } on HttpException {
-      throw const CourierException(
-        'PROVIDER_CONNECTION_FAILED',
-        'AI Provider 连接异常',
-      );
+      throw const CourierException('PROVIDER_CONNECTION_FAILED', '供应商连接异常');
     }
   }
 
@@ -157,17 +163,21 @@ class OfficialAIProviderClient implements AIProviderClient {
     try {
       for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
         if (_cancelledRequests.contains(request.requestId)) {
-          throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+          throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
         }
 
         HttpClientRequest? httpRequest;
         try {
           httpRequest = await _client.postUrl(
-            baseUri.resolve(id == 'openai' ? 'responses' : 'messages'),
+            baseUri.resolve(
+              protocol == ProviderProtocol.openaiCompatible
+                  ? 'responses'
+                  : 'messages',
+            ),
           );
           if (_cancelledRequests.contains(request.requestId)) {
             httpRequest.abort();
-            throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+            throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
           }
           _activeRequests[request.requestId] = httpRequest;
           _applyHeaders(httpRequest, request.apiKey, stream: true);
@@ -187,7 +197,7 @@ class OfficialAIProviderClient implements AIProviderClient {
             response,
           ).timeout(_responseTimeout)) {
             if (_cancelledRequests.contains(request.requestId)) {
-              throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+              throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
             }
             final delta = _extractDelta(event);
             if (delta != null && delta.isNotEmpty) {
@@ -200,42 +210,35 @@ class OfficialAIProviderClient implements AIProviderClient {
         } on FormatException {
           throw const CourierException(
             'INVALID_PROVIDER_RESPONSE',
-            'AI Provider 返回了无法识别的数据',
+            '供应商返回了无法识别的数据',
           );
         } on TimeoutException {
           httpRequest?.abort();
-          lastError = const CourierException(
-            'PROVIDER_TIMEOUT',
-            'AI Provider 响应超时',
-          );
+          lastError = const CourierException('PROVIDER_TIMEOUT', '供应商响应超时');
           if (attempt >= _maxAttempts) throw lastError;
         } on SocketException {
-          lastError = const CourierException(
-            'PROVIDER_UNREACHABLE',
-            '无法连接 AI Provider',
-          );
+          lastError = const CourierException('PROVIDER_UNREACHABLE', '无法连接供应商');
           if (attempt >= _maxAttempts) throw lastError;
         } on HttpException {
           if (_cancelledRequests.contains(request.requestId)) {
-            throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+            throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
           }
           lastError = const CourierException(
             'PROVIDER_CONNECTION_FAILED',
-            'AI Provider 连接异常',
+            '供应商连接异常',
           );
           if (attempt >= _maxAttempts) throw lastError;
         } finally {
           _activeRequests.remove(request.requestId);
         }
         if (_cancelledRequests.contains(request.requestId)) {
-          throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+          throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
         }
         await Future<void>.delayed(
           Duration(milliseconds: 250 * attempt * attempt),
         );
       }
-      throw lastError ??
-          const CourierException('PROVIDER_ERROR', 'AI Provider 请求失败');
+      throw lastError ?? const CourierException('PROVIDER_ERROR', '供应商请求失败');
     } finally {
       _activeRequests.remove(request.requestId);
       _cancelledRequests.remove(request.requestId);
@@ -271,7 +274,7 @@ class OfficialAIProviderClient implements AIProviderClient {
       HttpHeaders.acceptHeader,
       stream ? 'text/event-stream' : 'application/json',
     );
-    if (id == 'openai') {
+    if (protocol == ProviderProtocol.openaiCompatible) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $apiKey');
     } else {
       request.headers.set('x-api-key', apiKey);
@@ -280,7 +283,7 @@ class OfficialAIProviderClient implements AIProviderClient {
   }
 
   Map<String, dynamic> _requestBody(AIProviderRequest request) {
-    if (id == 'openai') {
+    if (protocol == ProviderProtocol.openaiCompatible) {
       return {
         'model': request.modelId,
         'input': request.messages
@@ -315,11 +318,11 @@ class OfficialAIProviderClient implements AIProviderClient {
           : null;
       throw CourierException(
         'PROVIDER_ERROR',
-        ErrorSanitizer.redact(message ?? 'AI Provider 返回错误'),
+        ErrorSanitizer.redact(message ?? '供应商返回错误'),
       );
     }
 
-    if (id == 'openai') {
+    if (protocol == ProviderProtocol.openaiCompatible) {
       if (type == 'response.output_text.delta') {
         return decoded['delta'] as String?;
       }
@@ -390,7 +393,7 @@ class OfficialAIProviderClient implements AIProviderClient {
       if (remaining <= 0) break;
       bytes.addAll(chunk.take(remaining));
     }
-    var message = 'AI Provider 请求失败，状态码 ${response.statusCode}';
+    var message = '供应商请求失败，状态码 ${response.statusCode}';
     if (bytes.isNotEmpty) {
       try {
         final decoded = jsonDecode(utf8.decode(bytes, allowMalformed: true));
@@ -418,12 +421,18 @@ class OfficialAIProviderClient implements AIProviderClient {
       if (bytes.length + chunk.length > limit) {
         throw const CourierException(
           'INVALID_PROVIDER_RESPONSE',
-          'AI Provider 响应超过允许的大小限制',
+          '供应商响应超过允许的大小限制',
         );
       }
       bytes.addAll(chunk);
     }
     return utf8.decode(bytes, allowMalformed: false);
+  }
+
+  static ProviderProtocol _defaultProtocol(String providerId) {
+    return providerId.trim().toLowerCase() == 'anthropic'
+        ? ProviderProtocol.anthropicCompatible
+        : ProviderProtocol.openaiCompatible;
   }
 }
 
@@ -436,6 +445,9 @@ class AIService extends ChangeNotifier {
   final SecureStorageService secureStorage;
   final AppLogger logger;
   final Map<String, AIProviderClient> _providers;
+  final CustomAIProviderClientFactory _customProviderClientFactory;
+  late final Set<String> _builtInProviderIds;
+  final Map<String, CustomAIProvider> _customProviderConfigurations = {};
   final Map<String, List<AIModelOption>> _models = {};
   final Map<String, String> _requestProviders = {};
   final Set<String> _cancelledRequests = {};
@@ -451,12 +463,19 @@ class AIService extends ChangeNotifier {
     required this.secureStorage,
     required this.logger,
     Map<String, AIProviderClient>? providers,
-  }) : _providers =
-           providers ??
-           {
-             'openai': OfficialAIProviderClient.openAI(),
-             'anthropic': OfficialAIProviderClient.anthropic(),
-           };
+    CustomAIProviderClientFactory? customProviderClientFactory,
+  }) : _providers = Map<String, AIProviderClient>.of(
+         providers ??
+             {
+               'openai': OfficialAIProviderClient.openAI(),
+               'anthropic': OfficialAIProviderClient.anthropic(),
+             },
+       ),
+       _customProviderClientFactory =
+           customProviderClientFactory ?? _createCustomProviderClient {
+    _builtInProviderIds = Set<String>.unmodifiable(_providers.keys);
+    applyCustomProviders(settings.customProviders);
+  }
 
   AISession? get session => _session;
   List<AIMessage> get messages => List.unmodifiable(_messages);
@@ -465,19 +484,87 @@ class AIService extends ChangeNotifier {
   String? get lastError => _lastError;
 
   AIGetOptionsResult get options {
+    _synchronizeCustomProviders();
+    final customProviders = {
+      for (final provider in settings.customProviders) provider.id: provider,
+    };
+    final providerIds = <String>[
+      ..._builtInProviderIds,
+      ...settings.customProviders.map((provider) => provider.id),
+    ];
     return AIGetOptionsResult(
-      providers: _providers.values
+      providers: providerIds
+          .map((providerId) => _providers[providerId])
+          .whereType<AIProviderClient>()
           .map(
             (provider) => AIProviderOption(
               id: provider.id,
               displayName: provider.displayName,
               models: _models[provider.id] ?? const [],
+              supportsMillionContext:
+                  customProviders[provider.id]?.supportsMillionContext ?? false,
             ),
           )
           .toList(growable: false),
       thinkingLevels: const [AIOptionItem(value: 'standard', label: '标准')],
       modes: const [AIOptionItem(value: 'readonly', label: '只读')],
     );
+  }
+
+  void applyCustomProviders(List<CustomAIProvider> providers) {
+    final nextConfigurations = <String, CustomAIProvider>{};
+    for (final provider in providers) {
+      if (_builtInProviderIds.contains(provider.id) ||
+          nextConfigurations.containsKey(provider.id)) {
+        throw const CourierException('INVALID_PROVIDER', '自定义供应商配置包含冲突标识');
+      }
+      nextConfigurations[provider.id] = provider;
+    }
+
+    final activeProviderIds = _requestProviders.values.toSet();
+    final replacements = <String, AIProviderClient>{};
+    try {
+      for (final entry in nextConfigurations.entries) {
+        final current = _customProviderConfigurations[entry.key];
+        if (current == entry.value || activeProviderIds.contains(entry.key)) {
+          continue;
+        }
+        final client = _customProviderClientFactory(entry.value);
+        if (client.id != entry.key) {
+          client.dispose();
+          throw const CourierException(
+            'INVALID_PROVIDER_CLIENT',
+            '自定义供应商客户端标识无效',
+          );
+        }
+        replacements[entry.key] = client;
+      }
+    } catch (_) {
+      for (final client in replacements.values) {
+        client.dispose();
+      }
+      rethrow;
+    }
+
+    final removedIds = _customProviderConfigurations.keys
+        .where(
+          (id) =>
+              !nextConfigurations.containsKey(id) &&
+              !activeProviderIds.contains(id),
+        )
+        .toList(growable: false);
+    for (final id in removedIds) {
+      _providers.remove(id)?.dispose();
+      _customProviderConfigurations.remove(id);
+      _models.remove(id);
+    }
+
+    for (final entry in replacements.entries) {
+      _providers.remove(entry.key)?.dispose();
+      _providers[entry.key] = entry.value;
+      _customProviderConfigurations[entry.key] = nextConfigurations[entry.key]!;
+      _models.remove(entry.key);
+    }
   }
 
   Future<List<AIModelOption>> refreshModels() async {
@@ -513,10 +600,10 @@ class AIService extends ChangeNotifier {
   Future<AISendMessageResult> sendMessage(String value) async {
     final currentSession = _session;
     if (currentSession == null) {
-      throw const CourierException('NO_SESSION', 'AI 会话尚未建立');
+      throw const CourierException('NO_SESSION', '助手会话尚未建立');
     }
     if (_sending) {
-      throw const CourierException('REQUEST_IN_PROGRESS', '已有 AI 请求正在进行');
+      throw const CourierException('REQUEST_IN_PROGRESS', '已有助手请求正在进行');
     }
     final text = value.trim();
     if (text.isEmpty || text.length > _maxInputCharacters) {
@@ -551,7 +638,7 @@ class AIService extends ChangeNotifier {
       _requestProviders[requestId] = provider.id;
       final apiKey = await _requireApiKey(provider.id);
       if (_cancelledRequests.contains(requestId)) {
-        throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+        throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
       }
       final providerRequest = AIProviderRequest(
         requestId: requestId,
@@ -565,14 +652,11 @@ class AIService extends ChangeNotifier {
       var lastNotification = DateTime.fromMillisecondsSinceEpoch(0);
       await for (final delta in provider.sendMessageStream(providerRequest)) {
         if (_cancelledRequests.contains(requestId)) {
-          throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+          throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
         }
         if (buffer.length + delta.length > _maxResponseCharacters) {
           await provider.cancel(requestId);
-          throw const CourierException(
-            'RESPONSE_TOO_LARGE',
-            'AI 回复超过应用允许的大小限制',
-          );
+          throw const CourierException('RESPONSE_TOO_LARGE', '助手回复超过应用允许的大小限制');
         }
         buffer.write(delta);
         _replaceMessage(
@@ -589,7 +673,7 @@ class AIService extends ChangeNotifier {
 
       if (_cancelledRequests.contains(requestId) ||
           _session?.sessionId != currentSession.sessionId) {
-        throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+        throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
       }
 
       _replaceMessage(
@@ -602,7 +686,7 @@ class AIService extends ChangeNotifier {
       await logger.info(
         'ai',
         'request_completed',
-        'AI 请求完成',
+        '助手请求完成',
         requestId: requestId,
       );
       return AISendMessageResult(
@@ -622,7 +706,7 @@ class AIService extends ChangeNotifier {
         await logger.info(
           'ai',
           'request_cancelled',
-          'AI 请求已取消',
+          '助手请求已取消',
           requestId: requestId,
         );
       } else {
@@ -636,7 +720,7 @@ class AIService extends ChangeNotifier {
       }
       rethrow;
     } catch (_) {
-      const error = CourierException('PROVIDER_ERROR', 'AI Provider 请求失败');
+      const error = CourierException('PROVIDER_ERROR', '供应商请求失败');
       if (_activeRequestId == requestId) {
         _lastError = error.message;
       }
@@ -685,7 +769,7 @@ class AIService extends ChangeNotifier {
       }
       final apiKey = await _requireApiKey(provider.id);
       if (_cancelledRequests.contains(requestId)) {
-        throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+        throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
       }
       final request = AIProviderRequest(
         requestId: requestId,
@@ -697,7 +781,7 @@ class AIService extends ChangeNotifier {
       );
       await for (final delta in provider.sendMessageStream(request)) {
         if (_cancelledRequests.contains(requestId)) {
-          throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+          throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
         }
         if (buffer.length + delta.length > _maxResponseCharacters) {
           await provider.cancel(requestId);
@@ -707,7 +791,7 @@ class AIService extends ChangeNotifier {
         onDelta(delta);
       }
       if (_cancelledRequests.contains(requestId)) {
-        throw const CourierException('REQUEST_CANCELLED', 'AI 请求已取消');
+        throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
       }
       return buffer.toString();
     } finally {
@@ -723,7 +807,12 @@ class AIService extends ChangeNotifier {
       _cancelledRequests.remove(requestId);
       return Future<void>.value();
     }
-    return _provider(providerId).cancel(requestId);
+    final provider = _providers[providerId];
+    if (provider == null) {
+      _cancelledRequests.remove(requestId);
+      return Future<void>.value();
+    }
+    return provider.cancel(requestId);
   }
 
   Future<void> cancelGeneration() async {
@@ -739,7 +828,7 @@ class AIService extends ChangeNotifier {
     final current = _session;
     if (current == null) {
       if (allowMissing) return null;
-      throw const CourierException('NO_SESSION', 'AI 会话尚未建立');
+      throw const CourierException('NO_SESSION', '助手会话尚未建立');
     }
     await cancelGeneration();
     _session = null;
@@ -756,28 +845,45 @@ class AIService extends ChangeNotifier {
   }
 
   void _validateConfiguration() {
+    _synchronizeCustomProviders();
     if (!_providers.containsKey(settings.aiProviderId)) {
-      throw const CourierException('AI_NOT_CONFIGURED', 'AI Provider 配置无效');
+      throw const CourierException('AI_NOT_CONFIGURED', '供应商配置无效');
     }
     if (settings.aiModelId.trim().isEmpty) {
-      throw const CourierException('AI_NOT_CONFIGURED', '需要先配置 AI 模型');
+      throw const CourierException('AI_NOT_CONFIGURED', '需要先配置供应商模型');
     }
   }
 
   Future<String> _requireApiKey(String providerId) async {
     final value = await secureStorage.readApiKey(providerId);
     if (value == null) {
-      throw const CourierException('AI_NOT_CONFIGURED', '需要先配置 AI API Key');
+      throw const CourierException('AI_NOT_CONFIGURED', '需要先配置供应商 API Key');
     }
     return value;
   }
 
   AIProviderClient _provider(String providerId) {
+    _synchronizeCustomProviders();
     final provider = _providers[providerId];
     if (provider == null) {
-      throw const CourierException('INVALID_PROVIDER', 'AI Provider 不受支持');
+      throw const CourierException('INVALID_PROVIDER', '供应商不受支持');
     }
     return provider;
+  }
+
+  void _synchronizeCustomProviders() {
+    applyCustomProviders(settings.customProviders);
+  }
+
+  static AIProviderClient _createCustomProviderClient(
+    CustomAIProvider provider,
+  ) {
+    return OfficialAIProviderClient(
+      id: provider.id,
+      displayName: provider.displayName,
+      baseUri: Uri.parse(provider.baseUrl),
+      protocol: provider.protocol,
+    );
   }
 
   List<AIConversationMessage> _contextMessages() {

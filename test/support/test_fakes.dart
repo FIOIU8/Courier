@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:courier_flutter/services/ai_service.dart';
 import 'package:courier_flutter/services/app_error.dart';
@@ -83,6 +85,138 @@ class FakeAIProviderClient implements AIProviderClient {
     }
     final error = streamError;
     if (error != null) throw error;
+  }
+}
+
+class RecordingHttpClient extends Fake implements HttpClient {
+  final List<RecordingHttpClientRequest> requests = [];
+  final List<HttpClientResponse> _responses;
+  bool closed = false;
+
+  RecordingHttpClient({required List<HttpClientResponse> responses})
+    : _responses = [...responses];
+
+  @override
+  set connectionTimeout(Duration? value) {}
+
+  @override
+  set idleTimeout(Duration value) {}
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) => _open('GET', url);
+
+  @override
+  Future<HttpClientRequest> postUrl(Uri url) => _open('POST', url);
+
+  Future<HttpClientRequest> _open(String method, Uri url) async {
+    if (_responses.isEmpty) {
+      throw StateError('No HTTP response configured');
+    }
+    final request = RecordingHttpClientRequest(
+      method: method,
+      uri: url,
+      response: _responses.removeAt(0),
+    );
+    requests.add(request);
+    return request;
+  }
+
+  @override
+  void close({bool force = false}) {
+    closed = true;
+  }
+}
+
+class RecordingHttpClientRequest extends Fake implements HttpClientRequest {
+  @override
+  final String method;
+  @override
+  final Uri uri;
+  final HttpClientResponse response;
+  final RecordingHttpHeaders recordedHeaders = RecordingHttpHeaders();
+  final StringBuffer body = StringBuffer();
+  bool aborted = false;
+
+  RecordingHttpClientRequest({
+    required this.method,
+    required this.uri,
+    required this.response,
+  });
+
+  @override
+  HttpHeaders get headers => recordedHeaders;
+
+  @override
+  void write(Object? object) {
+    body.write(object);
+  }
+
+  @override
+  Future<HttpClientResponse> close() async => response;
+
+  @override
+  void abort([Object? exception, StackTrace? stackTrace]) {
+    aborted = true;
+  }
+}
+
+class RecordingHttpHeaders extends Fake implements HttpHeaders {
+  final Map<String, List<String>> values = {};
+
+  @override
+  set contentType(ContentType? value) {
+    if (value == null) {
+      values.remove(HttpHeaders.contentTypeHeader);
+      return;
+    }
+    set(HttpHeaders.contentTypeHeader, value.toString());
+  }
+
+  @override
+  void set(String name, Object value, {bool preserveHeaderCase = false}) {
+    values[name.toLowerCase()] = [value.toString()];
+  }
+
+  @override
+  String? value(String name) {
+    final entries = values[name.toLowerCase()];
+    if (entries == null || entries.isEmpty) return null;
+    return entries.join(',');
+  }
+}
+
+class StubHttpClientResponse extends Fake implements HttpClientResponse {
+  @override
+  final int statusCode;
+  @override
+  final HttpHeaders headers;
+  final Stream<List<int>> _body;
+
+  StubHttpClientResponse({
+    this.statusCode = HttpStatus.ok,
+    String body = '',
+    HttpHeaders? headers,
+  }) : headers = headers ?? RecordingHttpHeaders(),
+       _body = Stream<List<int>>.value(utf8.encode(body));
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int>)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _body.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
+
+  @override
+  Stream<S> transform<S>(StreamTransformer<List<int>, S> streamTransformer) {
+    return _body.transform(streamTransformer);
   }
 }
 

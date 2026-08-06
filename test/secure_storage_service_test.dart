@@ -59,6 +59,22 @@ void main() {
     expect(await service.readApiKey('openai'), credential);
   });
 
+  test('自定义供应商 API Key 使用独立凭据键完成读写删除', () async {
+    final store = MemoryCredentialStore();
+    final service = SecureStorageService(store: store);
+    final credential = generatedCredential();
+    const providerId = 'custom-provider';
+
+    await service.saveApiKey(providerId, credential);
+
+    expect(await service.hasApiKey(providerId), isTrue);
+    expect(await service.readApiKey(providerId), credential);
+    expect(store.values['courier.ai.$providerId.api_key'], credential);
+
+    await service.deleteApiKey(providerId);
+    expect(await service.hasApiKey(providerId), isFalse);
+  });
+
   test('API Key 拒绝空值、空字符和超过系统存储限制的内容', () async {
     final service = SecureStorageService(store: MemoryCredentialStore());
 

@@ -1,18 +1,27 @@
 // settings_state.dart - Validated global settings and credential references.
 
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_error.dart';
 import 'app_logger.dart';
+import 'models.dart';
 import 'secure_storage_service.dart';
 
 typedef PreferencesLoader = Future<SharedPreferences> Function();
 
 class SettingsState extends ChangeNotifier {
   static const supportedProviders = {'openai', 'anthropic'};
+  static const int minAiMaxTokens = 256;
+  static const int standardAiMaxTokens = 131072;
+  static const int millionContextAiMaxTokens = 1000000;
+  static const int _maxCustomProviders = 50;
+  static const String _customProvidersKey = 'custom_ai_providers';
+  static final Random _secureRandom = Random.secure();
 
   final SecureStorageService secureStorage;
   final PreferencesLoader _preferencesLoader;
@@ -24,6 +33,7 @@ class SettingsState extends ChangeNotifier {
   String _aiProviderId = 'openai';
   String _aiModelId = '';
   bool _apiKeyConfigured = false;
+  List<CustomAIProvider> _customProviders = const [];
   int _editorFontSize = 14;
   bool _autoSave = false;
   int _autoSaveDelaySeconds = 5;
@@ -46,6 +56,8 @@ class SettingsState extends ChangeNotifier {
   String get aiProviderId => _aiProviderId;
   String get aiModelId => _aiModelId;
   bool get apiKeyConfigured => _apiKeyConfigured;
+  List<CustomAIProvider> get customProviders =>
+      List<CustomAIProvider>.unmodifiable(_customProviders);
   int get editorFontSize => _editorFontSize;
   bool get autoSave => _autoSave;
   int get autoSaveDelaySeconds => _autoSaveDelaySeconds;
@@ -59,19 +71,23 @@ class SettingsState extends ChangeNotifier {
   bool get aiConfigurationReady =>
       _apiKeyConfigured && _aiModelId.trim().isNotEmpty;
 
+  bool get currentProviderSupportsMillionContext =>
+      _providerSupportsMillionContext(_aiProviderId);
+
+  int get aiMaxTokensUpperBound => currentProviderSupportsMillionContext
+      ? millionContextAiMaxTokens
+      : standardAiMaxTokens;
+
   Future<void> load() async {
     final preferences = await _preferencesLoader();
+    _customProviders = _decodeCustomProviders(
+      preferences.getString(_customProvidersKey),
+    );
     _aiTemperature = _boundedDouble(
       preferences.getDouble('ai_temperature') ?? 0.7,
       0.0,
       2.0,
     );
-    _aiMaxTokens = _boundedInt(
-      preferences.getInt('ai_max_tokens') ?? 4096,
-      256,
-      131072,
-    );
-
     final environmentProvider = _environment['COURIER_AI_PROVIDER_ID']
         ?.trim()
         .toLowerCase();
@@ -82,6 +98,11 @@ class SettingsState extends ChangeNotifier {
     _aiProviderId = _validatedProvider(
       environmentProvider ?? storedProvider ?? 'openai',
       fallbackToDefault: true,
+    );
+    _aiMaxTokens = _boundedInt(
+      preferences.getInt('ai_max_tokens') ?? 4096,
+      minAiMaxTokens,
+      _maxTokensForProvider(_aiProviderId),
     );
 
     final environmentModel = _environment['COURIER_AI_MODEL_ID']?.trim();
@@ -136,10 +157,11 @@ class SettingsState extends ChangeNotifier {
   }
 
   Future<void> setAiMaxTokens(int value) async {
-    if (value < 256 || value > 131072) {
-      throw const CourierException(
+    final upperBound = aiMaxTokensUpperBound;
+    if (value < minAiMaxTokens || value > upperBound) {
+      throw CourierException(
         'INVALID_SETTING',
-        '最大 Token 必须位于 256 到 131072',
+        '最大 Token 必须位于 $minAiMaxTokens 到 $upperBound',
       );
     }
     await _persist((preferences) => preferences.setInt('ai_max_tokens', value));
@@ -150,11 +172,160 @@ class SettingsState extends ChangeNotifier {
   Future<void> setAiProviderId(String value) async {
     final provider = _validatedProvider(value);
     final apiKeyConfigured = await secureStorage.hasApiKey(provider);
-    await _persist(
-      (preferences) => preferences.setString('ai_provider', provider),
+    final maxTokens = _boundedInt(
+      _aiMaxTokens,
+      minAiMaxTokens,
+      _maxTokensForProvider(provider),
     );
+    await _persist((preferences) async {
+      if (maxTokens != _aiMaxTokens &&
+          !await preferences.setInt('ai_max_tokens', maxTokens)) {
+        return false;
+      }
+      return preferences.setString('ai_provider', provider);
+    });
     _aiProviderId = provider;
+    _aiMaxTokens = maxTokens;
     _apiKeyConfigured = apiKeyConfigured;
+    notifyListeners();
+  }
+
+  Future<CustomAIProvider> addCustomProvider({
+    required String displayName,
+    required String baseUrl,
+    ProviderProtocol protocol = ProviderProtocol.openaiCompatible,
+    bool supportsMillionContext = false,
+  }) async {
+    if (_customProviders.length >= _maxCustomProviders) {
+      throw const CourierException('INVALID_SETTING', '自定义供应商数量已达到上限');
+    }
+    final provider = _createCustomProvider(
+      displayName: displayName,
+      baseUrl: baseUrl,
+      protocol: protocol,
+      supportsMillionContext: supportsMillionContext,
+    );
+    final updated = [..._customProviders, provider];
+    await _persistCustomProviders(updated);
+    _customProviders = List<CustomAIProvider>.unmodifiable(updated);
+    notifyListeners();
+    return provider;
+  }
+
+  Future<void> updateCustomProvider({
+    required String id,
+    required String displayName,
+    required String baseUrl,
+    required ProviderProtocol protocol,
+    required bool supportsMillionContext,
+  }) async {
+    final providerId = id.trim().toLowerCase();
+    final index = _customProviders.indexWhere(
+      (provider) => provider.id == providerId,
+    );
+    if (index < 0) {
+      throw const CourierException('INVALID_SETTING', '自定义供应商不存在');
+    }
+
+    final replacement = _validatedCustomProvider(
+      id: providerId,
+      displayName: displayName,
+      baseUrl: baseUrl,
+      protocol: protocol,
+      supportsMillionContext: supportsMillionContext,
+      createdAt: _customProviders[index].createdAt,
+    );
+    final updated = [..._customProviders]..[index] = replacement;
+    final maxTokens = providerId == _aiProviderId
+        ? _boundedInt(
+            _aiMaxTokens,
+            minAiMaxTokens,
+            supportsMillionContext
+                ? millionContextAiMaxTokens
+                : standardAiMaxTokens,
+          )
+        : _aiMaxTokens;
+    await _persist((preferences) async {
+      if (maxTokens != _aiMaxTokens &&
+          !await preferences.setInt('ai_max_tokens', maxTokens)) {
+        return false;
+      }
+      return preferences.setString(
+        _customProvidersKey,
+        _encodeCustomProviders(updated),
+      );
+    });
+    _customProviders = List<CustomAIProvider>.unmodifiable(updated);
+    _aiMaxTokens = maxTokens;
+    notifyListeners();
+  }
+
+  Future<void> deleteCustomProvider(String id) async {
+    final providerId = id.trim().toLowerCase();
+    if (!CustomAIProvider.idPattern.hasMatch(providerId)) {
+      throw const CourierException('INVALID_SETTING', '供应商标识无效');
+    }
+    final index = _customProviders.indexWhere(
+      (provider) => provider.id == providerId,
+    );
+    if (index < 0) {
+      throw const CourierException('INVALID_SETTING', '自定义供应商不存在');
+    }
+
+    final updated = [..._customProviders]..removeAt(index);
+    final deletingCurrent = providerId == _aiProviderId;
+    final fallbackApiKeyConfigured = deletingCurrent
+        ? await secureStorage.hasApiKey('openai')
+        : _apiKeyConfigured;
+    final existingCredential = await secureStorage.readApiKey(providerId);
+    await secureStorage.deleteApiKey(providerId);
+
+    try {
+      await _persist((preferences) async {
+        if (deletingCurrent) {
+          final maxTokens = _boundedInt(
+            _aiMaxTokens,
+            minAiMaxTokens,
+            standardAiMaxTokens,
+          );
+          if (!await preferences.setInt('ai_max_tokens', maxTokens)) {
+            return false;
+          }
+          if (!await preferences.setString('ai_model', '')) return false;
+          if (!await preferences.setString('ai_provider', 'openai')) {
+            return false;
+          }
+        }
+        return preferences.setString(
+          _customProvidersKey,
+          _encodeCustomProviders(updated),
+        );
+      });
+    } catch (error, stackTrace) {
+      if (existingCredential != null) {
+        try {
+          await secureStorage.saveApiKey(providerId, existingCredential);
+        } catch (_) {
+          throw const CourierException(
+            'CREDENTIAL_ROLLBACK_FAILED',
+            '删除供应商失败，且无法恢复原凭据状态',
+          );
+        }
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+
+    _customProviders = List<CustomAIProvider>.unmodifiable(updated);
+    if (deletingCurrent) {
+      _aiProviderId = 'openai';
+      _aiModelId = '';
+      _aiMaxTokens = _boundedInt(
+        _aiMaxTokens,
+        minAiMaxTokens,
+        standardAiMaxTokens,
+      );
+      _apiKeyConfigured = fallbackApiKeyConfigured;
+    }
     notifyListeners();
   }
 
@@ -263,14 +434,15 @@ class SettingsState extends ChangeNotifier {
     return _writeChain;
   }
 
-  static String _validatedProvider(
-    String value, {
-    bool fallbackToDefault = false,
-  }) {
+  String _validatedProvider(String value, {bool fallbackToDefault = false}) {
     final provider = value.trim().toLowerCase();
-    if (!supportedProviders.contains(provider)) {
+    final valid =
+        CustomAIProvider.idPattern.hasMatch(provider) &&
+        (supportedProviders.contains(provider) ||
+            _customProviders.any((custom) => custom.id == provider));
+    if (!valid) {
       if (fallbackToDefault) return 'openai';
-      throw const CourierException('INVALID_SETTING', 'AI Provider 标识无效');
+      throw const CourierException('INVALID_SETTING', '供应商标识无效');
     }
     return provider;
   }
@@ -279,7 +451,7 @@ class SettingsState extends ChangeNotifier {
     final model = value.trim();
     if (model.length > 128 || model.contains(RegExp(r'[\x00-\x1f]'))) {
       if (fallbackToEmpty) return '';
-      throw const CourierException('INVALID_SETTING', 'AI 模型标识无效');
+      throw const CourierException('INVALID_SETTING', '供应商模型标识无效');
     }
     return model;
   }
@@ -288,6 +460,117 @@ class SettingsState extends ChangeNotifier {
 
   static double _boundedDouble(double value, double min, double max) =>
       value.clamp(min, max);
+
+  int _maxTokensForProvider(String providerId) =>
+      _providerSupportsMillionContext(providerId)
+      ? millionContextAiMaxTokens
+      : standardAiMaxTokens;
+
+  bool _providerSupportsMillionContext(String providerId) {
+    return _customProviders
+            .where((provider) => provider.id == providerId)
+            .firstOrNull
+            ?.supportsMillionContext ??
+        false;
+  }
+
+  CustomAIProvider _createCustomProvider({
+    required String displayName,
+    required String baseUrl,
+    required ProviderProtocol protocol,
+    required bool supportsMillionContext,
+  }) {
+    for (var attempt = 0; attempt < 32; attempt++) {
+      final timestamp = DateTime.now()
+          .toUtc()
+          .microsecondsSinceEpoch
+          .toRadixString(36);
+      final random = _secureRandom
+          .nextInt(0x7fffffff)
+          .toRadixString(36)
+          .padLeft(6, '0');
+      final id = 'custom-$timestamp-$random';
+      if (_customProviders.every((provider) => provider.id != id)) {
+        return _validatedCustomProvider(
+          id: id,
+          displayName: displayName,
+          baseUrl: baseUrl,
+          protocol: protocol,
+          supportsMillionContext: supportsMillionContext,
+          createdAt: DateTime.now().toUtc(),
+        );
+      }
+    }
+    throw const CourierException('ID_GENERATION_FAILED', '无法生成供应商标识');
+  }
+
+  CustomAIProvider _validatedCustomProvider({
+    required String id,
+    required String displayName,
+    required String baseUrl,
+    required ProviderProtocol protocol,
+    required bool supportsMillionContext,
+    required DateTime createdAt,
+  }) {
+    if (supportedProviders.contains(id)) {
+      throw const CourierException('INVALID_SETTING', '供应商标识与内置供应商冲突');
+    }
+    try {
+      return CustomAIProvider(
+        id: id,
+        displayName: displayName,
+        baseUrl: baseUrl,
+        protocol: protocol,
+        supportsMillionContext: supportsMillionContext,
+        createdAt: createdAt,
+      );
+    } on FormatException {
+      throw const CourierException('INVALID_SETTING', '供应商名称或 Base API 地址无效');
+    }
+  }
+
+  Future<void> _persistCustomProviders(List<CustomAIProvider> providers) {
+    return _persist(
+      (preferences) => preferences.setString(
+        _customProvidersKey,
+        _encodeCustomProviders(providers),
+      ),
+    );
+  }
+
+  static String _encodeCustomProviders(List<CustomAIProvider> providers) {
+    return jsonEncode(
+      providers.map((provider) => provider.toJson()).toList(growable: false),
+    );
+  }
+
+  static List<CustomAIProvider> _decodeCustomProviders(String? value) {
+    if (value == null || value.trim().isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! List) return const [];
+      final providers = <CustomAIProvider>[];
+      final ids = <String>{};
+      for (final item in decoded.take(_maxCustomProviders)) {
+        if (item is! Map) continue;
+        try {
+          final provider = CustomAIProvider.fromJson(
+            Map<String, dynamic>.from(item),
+          );
+          if (supportedProviders.contains(provider.id) ||
+              !ids.add(provider.id)) {
+            continue;
+          }
+          providers.add(provider);
+        } on FormatException {
+          continue;
+        }
+      }
+      return List<CustomAIProvider>.unmodifiable(providers);
+    } on FormatException {
+      return const [];
+    }
+  }
 
   static AppLogLevel _parseLogLevel(String value) {
     return AppLogLevel.values.firstWhere(

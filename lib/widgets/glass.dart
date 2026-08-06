@@ -113,6 +113,12 @@ Color glassInputUnderlineOf(BuildContext context) =>
 Color applyOpacity(Color color, double opacity) =>
     color.withValues(alpha: color.a * opacity);
 
+/// 面板表面的不透明底色：切换动画期间用于遮盖透明页面，防止背景透出。
+Color glassSurfaceSolidColor(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? VscodePalette.panel
+    : const Color(0xFF0C1220);
+
 /// 统一对话框圆角与边框样式（随 UI 样式联动）。
 ShapeBorder kDialogShapeOf(BuildContext context) => RoundedRectangleBorder(
   borderRadius: BorderRadius.circular(kRadiusLg),

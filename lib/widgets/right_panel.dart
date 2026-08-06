@@ -324,9 +324,21 @@ class _SlideSwitcherState extends State<_SlideSwitcher>
 
   @override
   Widget build(BuildContext context) {
+    // 切换动画期间在页面层下方铺一层不透明面板底色：面板主体是透明的，
+    // 若不加遮盖，滑动时新旧页面并排会直接露出背后的背景图片；
+    // 切换完成后淡出遮盖，恢复面板的实际透明度。
+    final covering = _previousChild != null;
     return Stack(
       fit: StackFit.expand,
       children: [
+        Positioned.fill(
+          child: AnimatedOpacity(
+            opacity: covering ? 1.0 : 0.0,
+            duration: covering ? Duration.zero : kAnimDurationFast,
+            curve: kAnimCurveIn,
+            child: ColoredBox(color: glassSurfaceSolidColor(context)),
+          ),
+        ),
         if (_previousChild != null)
           AnimatedBuilder(
             animation: _outAnimation,

@@ -205,6 +205,111 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('供应商弹窗内配置请求方式/API Key/提示词并显示正规提示', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {
+          'openai': FakeAIProviderClient(),
+          'anthropic': FakeAIProviderClient(
+            id: 'anthropic',
+            displayName: 'Anthropic',
+          ),
+        },
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 设置主界面不再直接显示请求方式与 API Key
+    expect(find.text('请求方式'), findsNothing);
+    expect(find.textContaining('Responses API'), findsNothing);
+
+    // 打开当前供应商（内置 openai）的编辑弹窗
+    await tester.tap(find.byTooltip('编辑供应商'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(find.text('编辑供应商设置'), findsOneWidget);
+    expect(
+      find.descendant(of: dialog, matching: find.text('OpenAI')),
+      findsOneWidget,
+    );
+    expect(find.text('https://api.openai.com/v1/'), findsOneWidget);
+    expect(find.text('Chat Completions'), findsOneWidget);
+    expect(
+      find.textContaining('第三方中转网关兼容 OpenAI Responses API'),
+      findsOneWidget,
+    );
+    expect(find.text('系统提示词（可选）'), findsOneWidget);
+    expect(find.text('更新 API Key（可选）'), findsOneWidget);
+
+    // 切换请求方式并填写提示词后保存
+    await tester.tap(find.text('Chat Completions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Responses API'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextFormField, '系统提示词（可选）'),
+      '你是代码助手',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    expect(settings.aiRequestMode, AIRequestMode.responses);
+    expect(settings.aiSystemPrompt, '你是代码助手');
+
+    // 切换到 anthropic 供应商：弹窗只提供 Anthropic API，无中转站提示
+    await tester.tap(find.byKey(const ValueKey('openai')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Anthropic').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('编辑供应商'));
+    await tester.pumpAndSettle();
+    expect(find.text('Anthropic API'), findsOneWidget);
+    expect(find.text('Responses API'), findsNothing);
+    expect(
+      find.textContaining('第三方中转网关兼容 OpenAI Responses API'),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('设置页区块切换为同向上下滑动', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
     final secureStorage = SecureStorageService(store: _MemoryCredentialStore());

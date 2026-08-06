@@ -37,7 +37,6 @@ class _SettingsPageState extends State<SettingsPage> {
   ];
 
   final TextEditingController _modelController = TextEditingController();
-  final TextEditingController _apiKeyController = TextEditingController();
   int _activeSection = 0;
 
   /// 区块切换滑动方向：1 = 新区块从右滑入；-1 = 从左滑入
@@ -47,7 +46,6 @@ class _SettingsPageState extends State<SettingsPage> {
   double? _dragBlurSigma;
   bool _initialized = false;
   bool _loadingModels = false;
-  bool _savingCredential = false;
   bool _savingProvider = false;
   List<AIModelOption> _availableModels = const [];
   String? _error;
@@ -64,7 +62,6 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void dispose() {
     _modelController.dispose();
-    _apiKeyController.dispose();
     super.dispose();
   }
 
@@ -73,7 +70,6 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       await settings.setAiProviderId(providerId);
       _availableModels = const [];
-      _apiKeyController.clear();
       setState(() => _error = null);
     } catch (error) {
       _showError(error);
@@ -121,62 +117,30 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _saveApiKey() async {
-    final value = _apiKeyController.text;
-    setState(() {
-      _savingCredential = true;
-      _error = null;
-    });
-    try {
-      await context.read<SettingsState>().saveApiKey(value);
-      _apiKeyController.clear();
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('API Key 已保存到系统凭据存储')));
-      }
-    } catch (error) {
-      _showError(error);
-    } finally {
-      if (mounted) setState(() => _savingCredential = false);
-    }
-  }
-
-  Future<void> _deleteApiKey() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: kDialogShape,
-        backgroundColor: kGlassFloatBg,
-        title: const Text('删除 API Key'),
-        content: const Text('删除后，当前供应商将无法发送请求。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+  /// 编辑当前供应商（内置或自定义）的设置弹窗入口
+  Future<void> _editCurrentProvider() async {
+    final settings = context.read<SettingsState>();
+    final providerId = settings.aiProviderId;
+    final custom = settings.customProviders
+        .where((provider) => provider.id == providerId)
+        .firstOrNull;
+    await _showProviderDialog(
+      existingProvider: custom,
+      builtInProviderId: custom == null ? providerId : null,
     );
-    if (confirmed != true || !mounted) return;
-    try {
-      await context.read<SettingsState>().deleteApiKey();
-    } catch (error) {
-      _showError(error);
-    }
   }
 
-  Future<void> _showCustomProviderDialog([
+  /// 创建/编辑供应商设置弹窗；请求方式、API Key 与系统提示词仅在弹窗内配置
+  Future<void> _showProviderDialog({
     CustomAIProvider? existingProvider,
-  ]) async {
+    String? builtInProviderId,
+  }) async {
     final result = await showDialog<_CustomProviderFormValue>(
       context: context,
-      builder: (dialogContext) =>
-          _CustomProviderDialog(existingProvider: existingProvider),
+      builder: (dialogContext) => _CustomProviderDialog(
+        existingProvider: existingProvider,
+        builtInProviderId: builtInProviderId,
+      ),
     );
     if (result == null || !mounted) return;
 
@@ -186,15 +150,16 @@ class _SettingsPageState extends State<SettingsPage> {
     });
     try {
       final settings = context.read<SettingsState>();
-      late final CustomAIProvider savedProvider;
-      if (existingProvider == null) {
-        savedProvider = await settings.addCustomProvider(
+      late final String providerId;
+      if (existingProvider == null && builtInProviderId == null) {
+        final savedProvider = await settings.addCustomProvider(
           displayName: result.displayName,
           baseUrl: result.baseUrl,
           protocol: result.protocol,
           supportsMillionContext: result.supportsMillionContext,
         );
-      } else {
+        providerId = savedProvider.id;
+      } else if (existingProvider != null) {
         await settings.updateCustomProvider(
           id: existingProvider.id,
           displayName: result.displayName,
@@ -202,25 +167,38 @@ class _SettingsPageState extends State<SettingsPage> {
           protocol: result.protocol,
           supportsMillionContext: result.supportsMillionContext,
         );
-        savedProvider = settings.customProviders.firstWhere(
-          (provider) => provider.id == existingProvider.id,
-        );
+        providerId = existingProvider.id;
+      } else {
+        providerId = builtInProviderId!;
       }
 
       if (result.apiKey.trim().isNotEmpty) {
-        if (savedProvider.id == settings.aiProviderId) {
+        if (providerId == settings.aiProviderId) {
           await settings.saveApiKey(result.apiKey);
         } else {
           await settings.secureStorage.saveApiKey(
-            savedProvider.id,
+            providerId,
             result.apiKey,
           );
         }
       }
+      if (result.deleteApiKey) {
+        if (providerId == settings.aiProviderId) {
+          await settings.deleteApiKey();
+        } else {
+          await settings.secureStorage.deleteApiKey(providerId);
+        }
+      }
+      await settings.setAiRequestModeFor(providerId, result.requestMode);
+      await settings.setAiSystemPrompt(result.systemPrompt);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(existingProvider == null ? '自定义供应商已添加' : '自定义供应商已更新'),
+            content: Text(
+              existingProvider == null && builtInProviderId == null
+                  ? '自定义供应商已添加'
+                  : '供应商设置已保存',
+            ),
           ),
         );
       }
@@ -263,7 +241,6 @@ class _SettingsPageState extends State<SettingsPage> {
       await settings.deleteCustomProvider(provider.id);
       if (deletingCurrent) {
         _modelController.clear();
-        _apiKeyController.clear();
         _availableModels = const [];
       }
     } catch (error) {
@@ -510,34 +487,42 @@ class _SettingsPageState extends State<SettingsPage> {
       children: [
         _settingRow(
           label: '供应商',
-          control: SizedBox(
-            width: 260,
-            child: DropdownButtonFormField<String>(
-              key: ValueKey(settings.aiProviderId),
-              initialValue: providerIds.contains(settings.aiProviderId)
-                  ? settings.aiProviderId
-                  : null,
-              decoration: const InputDecoration(isDense: true),
-              items: options.providers
-                  .map(
-                    (provider) => DropdownMenuItem(
-                      value: provider.id,
-                      child: Text(provider.displayName),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (provider) {
-                if (provider != null) unawaited(_changeProvider(provider));
-              },
-            ),
+          control: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 260,
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey(settings.aiProviderId),
+                  initialValue: providerIds.contains(settings.aiProviderId)
+                      ? settings.aiProviderId
+                      : null,
+                  decoration: const InputDecoration(isDense: true),
+                  items: options.providers
+                      .map(
+                        (provider) => DropdownMenuItem(
+                          value: provider.id,
+                          child: Text(provider.displayName),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (provider) {
+                    if (provider != null) unawaited(_changeProvider(provider));
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip: '编辑供应商',
+                onPressed: _savingProvider ? null : _editCurrentProvider,
+                icon: const Icon(Icons.settings_outlined, size: 18),
+              ),
+            ],
           ),
         ),
         _settingRow(
           label: '自定义供应商',
           control: FilledButton.icon(
-            onPressed: _savingProvider
-                ? null
-                : () => _showCustomProviderDialog(),
+            onPressed: _savingProvider ? null : () => _showProviderDialog(),
             icon: const Icon(Icons.add_business_outlined, size: 18),
             label: const Text('添加自定义供应商'),
           ),
@@ -613,49 +598,6 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ),
-        _settingRow(
-          label: 'API Key',
-          control: SizedBox(
-            width: 360,
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _apiKeyController,
-                    obscureText: true,
-                    enableSuggestions: false,
-                    autocorrect: false,
-                    maxLength: 2048,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      counterText: '',
-                      suffixIcon: Icon(
-                        settings.apiKeyConfigured
-                            ? Icons.verified_user_outlined
-                            : Icons.key_outlined,
-                        size: 17,
-                        color: settings.apiKeyConfigured
-                            ? const Color(0xFF10B981)
-                            : Colors.white38,
-                      ),
-                    ),
-                    onSubmitted: (_) => _saveApiKey(),
-                  ),
-                ),
-                IconButton(
-                  tooltip: '保存 API Key',
-                  onPressed: _savingCredential ? null : _saveApiKey,
-                  icon: const Icon(Icons.save_outlined, size: 18),
-                ),
-                IconButton(
-                  tooltip: '删除 API Key',
-                  onPressed: settings.apiKeyConfigured ? _deleteApiKey : null,
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                ),
-              ],
-            ),
-          ),
-        ),
         _sliderRow(
           label: '温度',
           value: settings.aiTemperature,
@@ -778,7 +720,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     tooltip: '编辑 ${providers[index].displayName}',
                     onPressed: _savingProvider
                         ? null
-                        : () => _showCustomProviderDialog(providers[index]),
+                        : () => _showProviderDialog(
+                            existingProvider: providers[index],
+                          ),
                     icon: const Icon(Icons.edit_outlined, size: 17),
                   ),
                   IconButton(
@@ -804,6 +748,14 @@ class _SettingsPageState extends State<SettingsPage> {
     return switch (protocol) {
       ProviderProtocol.openaiCompatible => 'OpenAI 兼容',
       ProviderProtocol.anthropicCompatible => 'Anthropic 兼容',
+    };
+  }
+
+  static String _requestModeLabel(AIRequestMode mode) {
+    return switch (mode) {
+      AIRequestMode.responses => 'Responses API',
+      AIRequestMode.chatCompletions => 'Chat Completions',
+      AIRequestMode.anthropic => 'Anthropic API',
     };
   }
 
@@ -1265,6 +1217,9 @@ class _CustomProviderFormValue {
   final String apiKey;
   final ProviderProtocol protocol;
   final bool supportsMillionContext;
+  final AIRequestMode requestMode;
+  final String systemPrompt;
+  final bool deleteApiKey;
 
   const _CustomProviderFormValue({
     required this.displayName,
@@ -1272,13 +1227,28 @@ class _CustomProviderFormValue {
     required this.apiKey,
     required this.protocol,
     required this.supportsMillionContext,
+    required this.requestMode,
+    required this.systemPrompt,
+    required this.deleteApiKey,
   });
 }
+
+/// 内置供应商的只读信息（编辑弹窗内展示）
+const Map<String, (String, String)> _builtInProviderInfo = {
+  'openai': ('OpenAI', 'https://api.openai.com/v1/'),
+  'anthropic': ('Anthropic', 'https://api.anthropic.com/v1/'),
+};
 
 class _CustomProviderDialog extends StatefulWidget {
   final CustomAIProvider? existingProvider;
 
-  const _CustomProviderDialog({this.existingProvider});
+  /// 内置供应商编辑模式（openai / anthropic），此时供应商信息只读
+  final String? builtInProviderId;
+
+  const _CustomProviderDialog({
+    this.existingProvider,
+    this.builtInProviderId,
+  });
 
   @override
   State<_CustomProviderDialog> createState() => _CustomProviderDialogState();
@@ -1289,8 +1259,22 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
   late final TextEditingController _displayNameController;
   late final TextEditingController _baseUrlController;
   final TextEditingController _apiKeyController = TextEditingController();
+  final TextEditingController _systemPromptController = TextEditingController();
   late ProviderProtocol _protocol;
   late bool _supportsMillionContext;
+  late AIRequestMode _requestMode;
+  bool _apiKeyConfigured = false;
+
+  bool get _isBuiltIn => widget.builtInProviderId != null;
+
+  /// 新建自定义供应商时尚未确定标识，此时为 null
+  String? get _providerId =>
+      widget.builtInProviderId ?? widget.existingProvider?.id;
+
+  List<AIRequestMode> get _requestModeOptions => _protocol ==
+          ProviderProtocol.anthropicCompatible
+      ? const [AIRequestMode.anthropic]
+      : const [AIRequestMode.chatCompletions, AIRequestMode.responses];
 
   @override
   void initState() {
@@ -1300,8 +1284,50 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
       text: provider?.displayName ?? '',
     );
     _baseUrlController = TextEditingController(text: provider?.baseUrl ?? '');
-    _protocol = provider?.protocol ?? ProviderProtocol.openaiCompatible;
+    _protocol = provider?.protocol ??
+        (widget.builtInProviderId == 'anthropic'
+            ? ProviderProtocol.anthropicCompatible
+            : ProviderProtocol.openaiCompatible);
     _supportsMillionContext = provider?.supportsMillionContext ?? false;
+    _requestMode = _requestModeOptions.first;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadKeyState());
+  }
+
+  Future<void> _loadKeyState() async {
+    if (!mounted) return;
+    final settings = context.read<SettingsState>();
+    final systemPrompt = settings.aiSystemPrompt;
+    if (systemPrompt.isNotEmpty && _systemPromptController.text.isEmpty) {
+      _systemPromptController.text = systemPrompt;
+    }
+    final providerId = _providerId;
+    if (providerId == null) return; // 新建供应商：保存后才应用设置
+    _requestMode = settings.aiRequestModeFor(providerId);
+    final configured = await settings.secureStorage.hasApiKey(providerId);
+    if (mounted) {
+      setState(() {
+        _apiKeyConfigured = configured;
+        if (!_requestModeOptions.contains(_requestMode)) {
+          _requestMode = _requestModeOptions.first;
+        }
+      });
+    }
+  }
+
+  Future<void> _deleteApiKey() async {
+    final providerId = _providerId;
+    if (providerId == null) return;
+    final settings = context.read<SettingsState>();
+    try {
+      await settings.secureStorage.deleteApiKey(providerId);
+      if (mounted) setState(() => _apiKeyConfigured = false);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$error')),
+        );
+      }
+    }
   }
 
   @override
@@ -1309,16 +1335,23 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
     _displayNameController.dispose();
     _baseUrlController.dispose();
     _apiKeyController.dispose();
+    _systemPromptController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final editing = widget.existingProvider != null;
+    final editing = widget.existingProvider != null || _isBuiltIn;
     return AlertDialog(
       shape: kDialogShape,
       backgroundColor: kGlassFloatBg,
-      title: Text(editing ? '编辑自定义供应商' : '添加自定义供应商'),
+      title: Text(
+        _isBuiltIn
+            ? '编辑供应商设置'
+            : editing
+            ? '编辑自定义供应商'
+            : '添加自定义供应商',
+      ),
       content: SizedBox(
         width: 520,
         child: SingleChildScrollView(
@@ -1328,26 +1361,123 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextFormField(
-                  controller: _displayNameController,
-                  maxLength: CustomAIProvider.maxDisplayNameLength,
-                  decoration: const InputDecoration(
-                    labelText: '供应商名称',
-                    counterText: '',
+                if (_isBuiltIn) ...[
+                  _readOnlyInfoRow('供应商', _builtInProviderInfo[_providerId]!.$1),
+                  const SizedBox(height: 10),
+                  _readOnlyInfoRow('Base API 地址', _builtInProviderInfo[_providerId]!.$2),
+                ] else ...[
+                  TextFormField(
+                    controller: _displayNameController,
+                    maxLength: CustomAIProvider.maxDisplayNameLength,
+                    decoration: const InputDecoration(
+                      labelText: '供应商名称',
+                      counterText: '',
+                    ),
+                    validator: _validateDisplayName,
                   ),
-                  validator: _validateDisplayName,
-                ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _baseUrlController,
+                    keyboardType: TextInputType.url,
+                    maxLength: CustomAIProvider.maxBaseUrlLength,
+                    decoration: const InputDecoration(
+                      labelText: 'Base API 地址',
+                      counterText: '',
+                    ),
+                    validator: _validateBaseUrl,
+                  ),
+                  const SizedBox(height: 14),
+                  if (!_isBuiltIn)
+                    DropdownButtonFormField<ProviderProtocol>(
+                      initialValue: _protocol,
+                      decoration: const InputDecoration(labelText: '协议类型'),
+                      items: ProviderProtocol.values
+                          .map(
+                            (protocol) => DropdownMenuItem(
+                              value: protocol,
+                              child: Text(
+                                _SettingsPageState._protocolLabel(protocol),
+                              ),
+                            ),
+                          )
+                          .toList(growable: false),
+                      onChanged: (protocol) {
+                        if (protocol != null) {
+                          setState(() {
+                            _protocol = protocol;
+                            if (!_requestModeOptions.contains(_requestMode)) {
+                              _requestMode = _requestModeOptions.first;
+                            }
+                          });
+                        }
+                      },
+                    ),
+                  const SizedBox(height: 14),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('支持百万上下文', style: TextStyle(fontSize: 13)),
+                    value: _supportsMillionContext,
+                    onChanged: (value) {
+                      setState(() => _supportsMillionContext = value);
+                    },
+                  ),
+                ],
                 const SizedBox(height: 14),
-                TextFormField(
-                  controller: _baseUrlController,
-                  keyboardType: TextInputType.url,
-                  maxLength: CustomAIProvider.maxBaseUrlLength,
-                  decoration: const InputDecoration(
-                    labelText: 'Base API 地址',
-                    counterText: '',
-                  ),
-                  validator: _validateBaseUrl,
+                DropdownButtonFormField<AIRequestMode>(
+                  key: ValueKey('provider_request_mode_$_providerId'),
+                  initialValue: _requestModeOptions.contains(_requestMode)
+                      ? _requestMode
+                      : null,
+                  decoration: const InputDecoration(labelText: '请求方式'),
+                  items: _requestModeOptions
+                      .map(
+                        (mode) => DropdownMenuItem(
+                          value: mode,
+                          child: Text(
+                            _SettingsPageState._requestModeLabel(mode),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (mode) {
+                    if (mode != null) setState(() => _requestMode = mode);
+                  },
                 ),
+                if (_requestModeOptions.contains(AIRequestMode.responses))
+                  Container(
+                    margin: const EdgeInsets.only(top: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0x1AF59E0B),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0x40F59E0B)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber,
+                          size: 14,
+                          color: Color(0xFFF59E0B),
+                        ),
+                        SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '提示：多数第三方中转网关兼容 OpenAI Responses API，如遇兼容问题可切换为 Chat Completions。',
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.4,
+                              color: Color(0xFFFDE68A),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _apiKeyController,
@@ -1361,32 +1491,31 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
                   ),
                   validator: _validateApiKey,
                 ),
+                if (_apiKeyConfigured)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _deleteApiKey,
+                      icon: const Icon(Icons.delete_outline, size: 15),
+                      label: const Text('删除已保存的 API Key'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFFF87171),
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 32),
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 14),
-                DropdownButtonFormField<ProviderProtocol>(
-                  initialValue: _protocol,
-                  decoration: const InputDecoration(labelText: '协议类型'),
-                  items: ProviderProtocol.values
-                      .map(
-                        (protocol) => DropdownMenuItem(
-                          value: protocol,
-                          child: Text(
-                            _SettingsPageState._protocolLabel(protocol),
-                          ),
-                        ),
-                      )
-                      .toList(growable: false),
-                  onChanged: (protocol) {
-                    if (protocol != null) setState(() => _protocol = protocol);
-                  },
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('支持百万上下文', style: TextStyle(fontSize: 13)),
-                  value: _supportsMillionContext,
-                  onChanged: (value) {
-                    setState(() => _supportsMillionContext = value);
-                  },
+                TextFormField(
+                  controller: _systemPromptController,
+                  minLines: 2,
+                  maxLines: 4,
+                  maxLength: SettingsState.maxSystemPromptLength,
+                  decoration: const InputDecoration(
+                    labelText: '系统提示词（可选）',
+                    counterText: '',
+                    alignLabelWithHint: true,
+                  ),
                 ),
               ],
             ),
@@ -1402,6 +1531,27 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
           onPressed: _submit,
           icon: const Icon(Icons.save_outlined, size: 17),
           label: const Text('保存'),
+        ),
+      ],
+    );
+  }
+
+  Widget _readOnlyInfoRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 96,
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: Colors.white54),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
+          ),
         ),
       ],
     );
@@ -1440,11 +1590,18 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     Navigator.of(context).pop(
       _CustomProviderFormValue(
-        displayName: _displayNameController.text.trim(),
-        baseUrl: CustomAIProvider.normalizeBaseUrl(_baseUrlController.text),
+        displayName: _isBuiltIn
+            ? _builtInProviderInfo[_providerId]!.$1
+            : _displayNameController.text.trim(),
+        baseUrl: _isBuiltIn
+            ? _builtInProviderInfo[_providerId]!.$2
+            : CustomAIProvider.normalizeBaseUrl(_baseUrlController.text),
         apiKey: _apiKeyController.text,
         protocol: _protocol,
         supportsMillionContext: _supportsMillionContext,
+        requestMode: _requestMode,
+        systemPrompt: _systemPromptController.text.trim(),
+        deleteApiKey: false,
       ),
     );
   }

@@ -351,6 +351,38 @@ class GitCommitResult {
   const GitCommitResult({required this.output, required this.message});
 }
 
+class GitCommitEntry {
+  final String shortHash;
+  final String fullHash;
+  final String subject;
+  final String authorName;
+  final String authorEmail;
+  final String authorDate;
+  final bool isHead;
+
+  const GitCommitEntry({
+    required this.shortHash,
+    required this.fullHash,
+    required this.subject,
+    required this.authorName,
+    required this.authorEmail,
+    required this.authorDate,
+    required this.isHead,
+  });
+}
+
+class GitLogResult {
+  final String workspacePath;
+  final List<GitCommitEntry> entries;
+  final bool truncated;
+
+  const GitLogResult({
+    required this.workspacePath,
+    required this.entries,
+    required this.truncated,
+  });
+}
+
 class GitDiffResult {
   final String diff;
   final bool staged;

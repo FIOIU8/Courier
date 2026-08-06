@@ -88,6 +88,7 @@ class CourierService extends ChangeNotifier {
   GitStatusResult? get currentGitStatus => git.status;
   GitBranchListResult? get gitBranches => git.branches;
   GitDiffResult? get currentGitDiff => git.diff;
+  GitLogResult? get currentGitLog => git.log;
 
   Future<void> initialize() async {
     _version = await _versionLoader();
@@ -210,6 +211,10 @@ class CourierService extends ChangeNotifier {
     return git.loadDiff(path: path, staged: staged);
   }
 
+  Future<GitLogResult> gitLog() => git.refreshLog();
+
+  Future<String> gitCommitDetail(String hash) => git.loadCommitDetail(hash);
+
   Future<void> gitStage(String path) => git.stage(path);
 
   Future<void> gitUnstage(String path) => git.unstage(path);
@@ -227,7 +232,11 @@ class CourierService extends ChangeNotifier {
   Future<void> refreshAll() async {
     final workspace = _workspacePath;
     if (workspace == null) return;
-    await Future.wait([git.refreshStatus(), git.refreshBranches()]);
+    await Future.wait([
+      git.refreshStatus(),
+      git.refreshBranches(),
+      git.refreshLog(),
+    ]);
     notifyListeners();
   }
 

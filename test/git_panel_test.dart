@@ -126,6 +126,124 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('tracked.txt'), findsOneWidget);
     expect(find.textContaining('+changed'), findsOneWidget);
+
+    await tester.tap(find.text('历史'));
+    await tester.pump();
+    expect(find.byKey(const Key('git-history-view')), findsOneWidget);
+    expect(find.text('chore: initialize widget repository'), findsOneWidget);
+    expect(find.text('HEAD'), findsOneWidget);
+    expect(find.text('未选择提交'), findsOneWidget);
+
+    final commitRow = tester.widget<InkWell>(
+      find
+          .ancestor(
+            of: find.text('chore: initialize widget repository'),
+            matching: find.byType(InkWell),
+          )
+          .first,
+    );
+    await tester.runAsync(() async {
+      commitRow.onTap!();
+      await waitForCondition(() => !courier.git.loading);
+    });
+    await tester.pump();
+    final detailFinder = find.byKey(const Key('git-commit-detail'));
+    expect(detailFinder, findsOneWidget);
+    final detail = tester.widget<SingleChildScrollView>(detailFinder);
+    final selectable = detail.child! as SelectableText;
+    expect(selectable.data, contains('chore: initialize widget repository'));
+    expect(selectable.data, contains('tracked.txt'));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.runAsync(courier.shutdown);
+  }, timeout: const Timeout(Duration(seconds: 30)));
+
+  testWidgets('Git 历史视图为空仓库显示空状态', (tester) async {
+    final repository = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('courier-empty-git-panel-'),
+    ))!;
+    addTearDown(() async {
+      if (await repository.exists()) {
+        await repository.delete(recursive: true);
+      }
+    });
+    late final SettingsState settings;
+    late final CourierService courier;
+    late final WorkspaceService workspace;
+    var gitAvailable = true;
+    await tester.runAsync(() async {
+      try {
+        await _runGit(repository.path, ['init']);
+      } on ProcessException {
+        gitAvailable = false;
+        return;
+      }
+      final excludeFile = File(
+        p.join(repository.path, '.git', 'info', 'exclude'),
+      );
+      await excludeFile.writeAsString(
+        '${await excludeFile.readAsString()}.Courier/\n',
+      );
+
+      SharedPreferences.setMockInitialValues({});
+      final secureStorage = SecureStorageService(
+        store: MemoryCredentialStore(),
+      );
+      settings = SettingsState(
+        secureStorage: secureStorage,
+        environment: const {},
+      );
+      await settings.load();
+      final logger = AppLogger();
+      final ai = AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      );
+      courier = CourierService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        aiService: ai,
+      );
+      workspace = WorkspaceService(
+        fileSystem: SafeFileSystem(),
+        configService: WorkspaceConfigService(logger: logger),
+        logger: logger,
+        onWorkspaceOpened: courier.bindWorkspace,
+      );
+      await workspace.openWorkspace(repository.path, persist: false);
+      await courier.refreshAll();
+    });
+    if (!gitAvailable) return;
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(360, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: GitPanel())),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('历史'));
+    await tester.pump();
+
+    expect(find.text('仓库暂无提交记录'), findsOneWidget);
+    expect(find.text('未选择提交'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
     await tester.runAsync(courier.shutdown);

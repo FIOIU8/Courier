@@ -16,6 +16,7 @@ class GitService extends ChangeNotifier {
   static const int _defaultOutputLimit = 1024 * 1024;
 
   final AppLogger logger;
+  final int _outputLimit;
 
   String? _workspacePath;
   bool _gitAvailable = false;
@@ -28,8 +29,17 @@ class GitService extends ChangeNotifier {
   GitStatusResult? _status;
   GitBranchListResult? _branches;
   GitDiffResult? _diff;
+  GitLogResult? _log;
 
-  GitService({required this.logger});
+  GitService({required this.logger}) : _outputLimit = _defaultOutputLimit;
+
+  @visibleForTesting
+  GitService.withOutputLimit({required this.logger, required int outputLimit})
+    : _outputLimit = outputLimit {
+    if (outputLimit <= 0) {
+      throw ArgumentError.value(outputLimit, 'outputLimit', '必须大于 0');
+    }
+  }
 
   String? get workspacePath => _workspacePath;
   bool get gitAvailable => _gitAvailable;
@@ -39,6 +49,7 @@ class GitService extends ChangeNotifier {
   GitStatusResult? get status => _status;
   GitBranchListResult? get branches => _branches;
   GitDiffResult? get diff => _diff;
+  GitLogResult? get log => _log;
 
   Future<void> bindWorkspace(String workspacePath) async {
     await _mutationTail;
@@ -58,6 +69,7 @@ class GitService extends ChangeNotifier {
     _status = null;
     _branches = null;
     _diff = null;
+    _log = null;
     _lastError = null;
     _loading = false;
 
@@ -122,6 +134,67 @@ class GitService extends ChangeNotifier {
     });
   }
 
+  Future<GitLogResult> refreshLog({int limit = 50}) async {
+    return _runOperation('log', () async {
+      _requireRepository();
+      if (limit < 1 || limit > 500) {
+        throw const CourierException(
+          'INVALID_GIT_LOG_LIMIT',
+          '提交记录数量必须在 1 到 500 之间',
+        );
+      }
+
+      final head = await _runGit(
+        ['rev-parse', '--verify', '--quiet', 'HEAD'],
+        allowedExitCodes: const {0, 1},
+      );
+      if (head.exitCode != 0) {
+        _log = GitLogResult(
+          workspacePath: _workspacePath!,
+          entries: const [],
+          truncated: false,
+        );
+        return _log!;
+      }
+
+      final result = await _runGit([
+        'log',
+        '--no-color',
+        '-n',
+        '$limit',
+        '--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00',
+      ], outputLimit: _outputLimit);
+      _log = GitLogResult(
+        workspacePath: _workspacePath!,
+        entries: _parseLog(result.stdout, head.stdout.trim()),
+        truncated: result.stdoutTruncated,
+      );
+      return _log!;
+    });
+  }
+
+  Future<String> loadCommitDetail(String hash) async {
+    return _runOperation('commit_detail', () async {
+      _requireRepository();
+      final normalized = hash.trim();
+      if (!RegExp(r'^[0-9a-fA-F]{7,64}$').hasMatch(normalized)) {
+        throw const CourierException('INVALID_COMMIT_HASH', '提交哈希无效');
+      }
+      final result = await _runGit([
+        'show',
+        '--stat',
+        '--no-color',
+        '--no-ext-diff',
+        '--format=fuller',
+        normalized,
+        '--',
+      ], outputLimit: _outputLimit);
+      final detail = result.stdout.trimRight();
+      if (!result.stdoutTruncated) return detail;
+      return detail.isEmpty ? '[输出已截断]' : '$detail\n\n[输出已截断]';
+    });
+  }
+
   Future<void> stage(String path) async {
     await _runMutation(() {
       return _runOperation('stage', () async {
@@ -158,7 +231,7 @@ class GitService extends ChangeNotifier {
         relative = _validateRelativePath(path);
         arguments.addAll(['--', relative]);
       }
-      final result = await _runGit(arguments, outputLimit: _defaultOutputLimit);
+      final result = await _runGit(arguments, outputLimit: _outputLimit);
       _diff = GitDiffResult(
         diff: result.stdout,
         staged: staged,
@@ -192,6 +265,7 @@ class GitService extends ChangeNotifier {
         final result = await _runGit(['commit', '-m', normalized]);
         await refreshStatus();
         await refreshBranches();
+        await refreshLog();
         return GitCommitResult(
           output: result.stdout.trim(),
           message: normalized,
@@ -218,8 +292,10 @@ class GitService extends ChangeNotifier {
         }
         if (normalized == branchList.current) return;
         await _runGit(['switch', '--no-guess', '--', normalized]);
+        _diff = null;
         await refreshStatus();
         await refreshBranches();
+        await refreshLog();
       });
     });
   }
@@ -294,6 +370,7 @@ class GitService extends ChangeNotifier {
     _status = null;
     _branches = null;
     _diff = null;
+    _log = null;
     notifyListeners();
   }
 
@@ -394,6 +471,35 @@ class GitService extends ChangeNotifier {
       }
     }
     return files;
+  }
+
+  List<GitCommitEntry> _parseLog(String output, String headHash) {
+    final fields = output.split('\u0000');
+    final entries = <GitCommitEntry>[];
+    final fullHashPattern = RegExp(r'^[0-9a-fA-F]{40,64}$');
+    final shortHashPattern = RegExp(r'^[0-9a-fA-F]+$');
+    for (var index = 0; index + 5 < fields.length; index += 6) {
+      final fullHash = fields[index].replaceFirst(RegExp(r'^[\r\n]+'), '');
+      final shortHash = fields[index + 1].trim();
+      final authorDate = fields[index + 4].trim();
+      if (!fullHashPattern.hasMatch(fullHash) ||
+          !shortHashPattern.hasMatch(shortHash) ||
+          DateTime.tryParse(authorDate) == null) {
+        continue;
+      }
+      entries.add(
+        GitCommitEntry(
+          shortHash: shortHash,
+          fullHash: fullHash,
+          authorName: fields[index + 2],
+          authorEmail: fields[index + 3],
+          authorDate: authorDate,
+          subject: fields[index + 5],
+          isHead: fullHash == headHash,
+        ),
+      );
+    }
+    return List<GitCommitEntry>.unmodifiable(entries);
   }
 
   String _validateRelativePath(String value) {

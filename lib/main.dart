@@ -18,11 +18,13 @@ import 'package:window_manager/window_manager.dart';
 import 'services/app_error.dart';
 import 'services/app_logger.dart';
 import 'services/courier_service.dart';
+import 'services/models.dart';
 import 'services/safe_file_system.dart';
 import 'services/secure_storage_service.dart';
 import 'services/settings_state.dart';
 import 'services/workspace_config_service.dart';
 import 'services/workspace_service.dart';
+import 'theme.dart';
 import 'widgets/file_tree_panel.dart';
 import 'widgets/animations.dart';
 import 'widgets/glass.dart';
@@ -252,17 +254,12 @@ class CourierApp extends StatelessWidget {
         ChangeNotifierProvider<CourierService>.value(value: courierService),
         ChangeNotifierProvider<SettingsState>.value(value: settings),
       ],
-      // 主题强调色跟随 SettingsState（自定义主题），变化时重建 MaterialApp
+      // 主题与强调色跟随 SettingsState（自定义主题），变化时重建 MaterialApp
       child: Consumer<SettingsState>(
         builder: (context, settings, _) => MaterialApp.router(
           title: 'Courier',
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            brightness: Brightness.dark,
-            colorSchemeSeed: settings.accentColor,
-            useMaterial3: true,
-            fontFamily: 'Microsoft YaHei UI',
-          ),
+          theme: buildAppTheme(settings.uiStyle, settings.accentColor),
           routerConfig: _router,
         ),
       ),
@@ -608,9 +605,11 @@ class _MainPageState extends State<MainPage> with WindowListener {
               Container(
                 key: const ValueKey('window-title-bar'),
                 width: double.infinity,
-                decoration: const BoxDecoration(
-                  color: kGlassHeaderBg,
-                  border: Border(bottom: BorderSide(color: kGlassBorder)),
+                decoration: BoxDecoration(
+                  color: glassHeaderBgOf(context),
+                  border: Border(
+                    bottom: BorderSide(color: glassBorderOf(context)),
+                  ),
                 ),
                 child: TitleBar(onOpenSettings: _openSettings),
               ),
@@ -640,13 +639,13 @@ class _MainPageState extends State<MainPage> with WindowListener {
                   ),
                 ),
               ),
-              const DecoratedBox(
-                key: ValueKey('window-status-bar'),
+              DecoratedBox(
+                key: const ValueKey('window-status-bar'),
                 decoration: BoxDecoration(
-                  color: kGlassHeaderBg,
-                  border: Border(top: BorderSide(color: kGlassBorder)),
+                  color: glassHeaderBgOf(context),
+                  border: Border(top: BorderSide(color: glassBorderOf(context))),
                 ),
-                child: SizedBox(width: double.infinity, child: _StatusBar()),
+                child: const SizedBox(width: double.infinity, child: _StatusBar()),
               ),
             ],
           ),
@@ -705,13 +704,90 @@ class _MainPageState extends State<MainPage> with WindowListener {
 // ============================================================
 // 背景
 // ============================================================
-class _Background extends StatelessWidget {
+class _Background extends StatefulWidget {
   const _Background();
 
   @override
+  State<_Background> createState() => _BackgroundState();
+}
+
+class _BackgroundState extends State<_Background> {
+  /// 启动时检测到背景图片文件缺失：回退纯色并提示一次
+  bool _imageMissing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_verifyBackgroundImage());
+    });
+  }
+
+  /// 背景图片文件不存在时回退纯色、提示并清除已持久化的路径；
+  /// 图片在运行中被删除则由 Image.errorBuilder 兜底，不崩溃。
+  Future<void> _verifyBackgroundImage() async {
+    final settings = context.read<SettingsState>();
+    final path = settings.backgroundImagePath;
+    if (path.isEmpty || _imageMissing) return;
+    var exists = false;
+    try {
+      exists = await File(path).exists();
+    } catch (_) {
+      exists = false;
+    }
+    if (!exists && mounted) {
+      setState(() => _imageMissing = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('背景图片不存在，已恢复默认背景')),
+      );
+      try {
+        await settings.setBackgroundImagePath('');
+      } catch (_) {
+        // 清理失败不影响界面，下次启动会再次检测
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
-      decoration: BoxDecoration(color: Color(0xFF101216)),
+    return Consumer<SettingsState>(
+      builder: (context, settings, _) {
+        final isVscode = settings.uiStyle == AppUiStyle.vscode;
+        final solidColor = isVscode
+            ? VscodePalette.background
+            : const Color(0xFF101216);
+        final path = settings.backgroundImagePath;
+        if (path.isEmpty || _imageMissing) {
+          return DecoratedBox(
+            decoration: BoxDecoration(color: solidColor),
+          );
+        }
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // 背景图：按透明度显示（gaplessPlayback 避免透明度变化时的闪烁）
+            Opacity(
+              opacity: settings.backgroundOpacity,
+              child: Image.file(
+                File(path),
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => DecoratedBox(
+                  decoration: BoxDecoration(color: solidColor),
+                ),
+              ),
+            ),
+            // 深色半透明遮罩，保证前景可读
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: isVscode
+                    ? const Color(0xF21E1E1E)
+                    : const Color(0xCC0C1220),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

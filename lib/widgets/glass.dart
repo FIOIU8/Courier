@@ -7,7 +7,9 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/models.dart';
 import '../services/settings_state.dart';
+import '../theme.dart';
 import 'animations.dart';
 
 // ============================================================
@@ -75,6 +77,31 @@ Color accentColorOf(BuildContext context) =>
 Color accentLightOf(BuildContext context) =>
     context.watch<SettingsState>().accentLightColor;
 
+/// 当前 UI 样式下的面板底色（VSCode 风格为扁平面板色）。
+/// 调用方需位于 Provider 树内且处于 build 上下文。
+Color glassBgOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? VscodePalette.panel
+    : kGlassBg;
+
+/// 当前 UI 样式下的头部/状态栏底色。
+Color glassHeaderBgOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? VscodePalette.panel
+    : kGlassHeaderBg;
+
+/// 当前 UI 样式下的玻璃边界色。
+Color glassBorderOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? VscodePalette.border
+    : kGlassBorder;
+
+/// 当前 UI 样式下的面板悬浮阴影（VSCode 扁平风格无阴影）。
+List<BoxShadow> glassShadowOf(BuildContext context) =>
+    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
+    ? const []
+    : kShadowMd;
+
 /// 统一对话框圆角与边框样式
 ShapeBorder get kDialogShape => RoundedRectangleBorder(
   borderRadius: BorderRadius.circular(kRadiusLg),
@@ -87,12 +114,14 @@ ShapeBorder get kDialogShape => RoundedRectangleBorder(
 
 /// 圆角 + 半透明底色 + 毛玻璃模糊 + 悬浮阴影的容器。
 /// [kEnableGlass] 为 false 时自动退化为纯半透明圆角卡片。
+/// [color]/[boxShadow]/[border] 未指定时按当前 UI 样式取默认
+/// （VSCode 风格为扁平面板色、无阴影）。
 class Glass extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double radius;
-  final Color color;
+  final Color? color;
   final List<BoxShadow>? boxShadow;
   final Border? border;
   final Clip clipBehavior;
@@ -103,29 +132,34 @@ class Glass extends StatelessWidget {
     this.padding,
     this.margin,
     this.radius = kRadiusLg,
-    this.color = kGlassBg,
-    this.boxShadow = kShadowMd,
+    this.color,
+    this.boxShadow,
     this.border,
     this.clipBehavior = Clip.antiAlias,
   });
 
   @override
   Widget build(BuildContext context) {
+    final settings = context.watch<SettingsState>();
+    final isVscode = settings.uiStyle == AppUiStyle.vscode;
     Widget inner = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: color,
+        color: color ?? (isVscode ? VscodePalette.panel : kGlassBg),
         borderRadius: BorderRadius.circular(radius),
-        border: border ?? Border.all(color: kGlassBorder),
+        border:
+            border ??
+            Border.all(
+              color: isVscode ? VscodePalette.border : kGlassBorder,
+            ),
       ),
       child: child,
     );
 
     // 毛玻璃模糊运行时开关与强度（自定义主题外观设置）。
-    // 关闭或强度为 0 时自动退化为半透明圆角卡片。
-    final settings = context.watch<SettingsState>();
+    // 关闭、强度为 0 或 VSCode 扁平风格时自动退化为纯色圆角卡片。
     final sigma = settings.blurSigma;
-    if (settings.glassEnabled && sigma > 0) {
+    if (settings.glassEnabled && sigma > 0 && !isVscode) {
       inner = ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         clipBehavior: clipBehavior,
@@ -140,7 +174,7 @@ class Glass extends StatelessWidget {
       margin: margin,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
-        boxShadow: boxShadow,
+        boxShadow: boxShadow ?? (isVscode ? const <BoxShadow>[] : kShadowMd),
       ),
       child: inner,
     );

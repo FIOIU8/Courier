@@ -249,7 +249,6 @@ class _SettingsPageState extends State<SettingsPage> {
               constraints: const BoxConstraints(maxWidth: 840, maxHeight: 640),
               child: Glass(
                 radius: kRadiusLg,
-                color: kGlassBg,
                 boxShadow: kShadowLg,
                 child: Material(
                   color: Colors.transparent,

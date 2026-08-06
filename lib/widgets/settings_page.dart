@@ -1685,9 +1685,20 @@ class _VerticalSlideSwitcherState extends State<_VerticalSlideSwitcher>
   @override
   Widget build(BuildContext context) {
     final shift = 0.15 * _previousDirection;
+    // 切换动画期间在区块下方铺一层不透明面板底色：区块主体透明，
+    // 否则滑动时会露出设置卡片背后的背景；完成后淡出遮盖恢复原样。
+    final covering = _previousChild != null;
     return Stack(
       alignment: Alignment.topLeft,
       children: [
+        Positioned.fill(
+          child: AnimatedOpacity(
+            opacity: covering ? 1.0 : 0.0,
+            duration: covering ? Duration.zero : kAnimDurationFast,
+            curve: kAnimCurveIn,
+            child: ColoredBox(color: glassSurfaceSolidColor(context)),
+          ),
+        ),
         if (_previousChild != null)
           AnimatedBuilder(
             animation: _outAnimation,

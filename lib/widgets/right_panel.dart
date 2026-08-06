@@ -1,6 +1,6 @@
 // right_panel.dart — 右侧功能面板（Tab 容器）
 //
-// 包含三个标签页：AI 助手、任务队列、Git。
+// 包含三个标签页：助手、任务队列、Git。
 // 整个内容区域支持接收文件拖拽，自动切换到任务队列并创建任务。
 
 import 'package:flutter/material.dart';
@@ -91,7 +91,7 @@ class _RightPanelState extends State<RightPanel> {
               children: [
                 Expanded(
                   child: _SegTab(
-                    label: 'AI',
+                    label: '助手',
                     icon: Icons.smart_toy,
                     active: _activeTab == 0,
                     onTap: () => setState(() => _activeTab = 0),

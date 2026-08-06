@@ -64,7 +64,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(tester.takeException(), isNull);
 
-    for (final label in ['任务', 'Git', 'AI']) {
+    for (final label in ['任务', 'Git', '助手']) {
       await tester.tap(find.text(label).first);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));

@@ -65,7 +65,7 @@ class AITaskExecutor implements TaskExecutor {
     final requestId = IdGenerator.create('task-request');
     _requestIds[task.id] = requestId;
     final output = StringBuffer();
-    onEvent('AI 请求已开始');
+    onEvent('助手请求已开始');
     onProgress(0.05);
     try {
       final result = await aiService.executeTask(
@@ -81,7 +81,7 @@ class AITaskExecutor implements TaskExecutor {
       );
       cancellationToken.throwIfCancelled();
       onProgress(1.0);
-      onEvent('AI 请求已完成');
+      onEvent('助手请求已完成');
       return TaskExecutionResult(output: result);
     } finally {
       _requestIds.remove(task.id);

@@ -161,7 +161,7 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
           Expanded(
             child: Text(
               session == null
-                  ? 'AI 未就绪'
+                  ? '供应商/模型未就绪'
                   : '${settings.aiProviderId} · ${settings.aiModelId}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -196,7 +196,7 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
           const SizedBox(width: 6),
           const Expanded(
             child: Text(
-              '需要配置模型与 API Key',
+              '需要配置供应商模型与 API Key',
               style: TextStyle(fontSize: 12, color: Color(0xFFFDE68A)),
             ),
           ),

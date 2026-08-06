@@ -299,7 +299,7 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
     final settings = context.read<SettingsState>();
     if (!service.taskQueue.queueRunning && !settings.aiConfigurationReady) {
       widget.onOpenSettings?.call();
-      _showError('启动队列前需要配置 AI 模型与 API Key');
+      _showError('启动队列前需要配置供应商模型与 API Key');
       return;
     }
     setState(() => _queueActionPending = true);

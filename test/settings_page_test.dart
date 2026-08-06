@@ -43,7 +43,10 @@ void main() {
     var closeCount = 0;
     SharedPreferences.setMockInitialValues({});
     final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
-    final settings = SettingsState(secureStorage: secureStorage);
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
     await settings.load();
     final logger = AppLogger();
     final courier = CourierService(
@@ -102,10 +105,89 @@ void main() {
     await tester.pump();
     expect(closeCount, 1);
 
-    for (final label in ['AI', '编辑器', '任务', '通用', '关于']) {
+    for (final label in ['供应商', '编辑器', '任务', '通用', '关于']) {
       await tester.tap(find.text(label).first);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: '「$label」分区渲染异常/溢出');
     }
+  });
+
+  testWidgets('自定义供应商表单可新增并经二次确认删除', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+        customProviderClientFactory: (provider) => FakeAIProviderClient(
+          id: provider.id,
+          displayName: provider.displayName,
+        ),
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加自定义供应商'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextFormField, '供应商名称'),
+      '界面测试供应商',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Base API 地址'),
+      'https://api.openai.com/v1/widget/',
+    );
+    await tester.tap(find.byType(Switch));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('界面测试供应商'), findsOneWidget);
+    expect(find.text('https://api.openai.com/v1/widget/'), findsOneWidget);
+    expect(find.text('百万上下文'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('删除 界面测试供应商'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除自定义供应商'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('界面测试供应商'), findsNothing);
+    expect(settings.customProviders, isEmpty);
+    expect(tester.takeException(), isNull);
   });
 }

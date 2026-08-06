@@ -199,7 +199,7 @@ class _HoverCardState extends State<HoverCard> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: kAnimDurationFast,
-          curve: Curves.easeOutBack,
+          curve: Curves.easeOutCubic,
           margin: widget.margin,
           padding: widget.padding,
           transform: _hover

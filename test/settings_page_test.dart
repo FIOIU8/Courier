@@ -13,6 +13,7 @@ import 'package:courier_flutter/services/secure_storage_service.dart';
 import 'package:courier_flutter/services/settings_state.dart';
 import 'package:courier_flutter/services/workspace_config_service.dart';
 import 'package:courier_flutter/services/workspace_service.dart';
+import 'package:courier_flutter/widgets/glass.dart';
 import 'package:courier_flutter/widgets/settings_page.dart';
 
 import 'support/test_fakes.dart';
@@ -39,6 +40,7 @@ class _MemoryCredentialStore implements CredentialStore {
 
 void main() {
   testWidgets('设置页各分区渲染无溢出', (WidgetTester tester) async {
+    var closeCount = 0;
     SharedPreferences.setMockInitialValues({});
     final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
     final settings = SettingsState(secureStorage: secureStorage);
@@ -77,12 +79,28 @@ void main() {
           ChangeNotifierProvider<CourierService>.value(value: courier),
           ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
         ],
-        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+        child: MaterialApp(
+          home: Scaffold(body: SettingsPage(onClose: () => closeCount += 1)),
+        ),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull, reason: '设置页初始渲染异常/溢出');
+
+    final settingsCard = find.byType(Glass);
+    final closeButton = find.byTooltip('关闭设置');
+    expect(settingsCard, findsOneWidget);
+    expect(closeButton, findsOneWidget);
+
+    final cardRect = tester.getRect(settingsCard);
+    final closeRect = tester.getRect(closeButton);
+    expect(cardRect.right - closeRect.right, lessThanOrEqualTo(24));
+    expect(closeRect.top - cardRect.top, lessThanOrEqualTo(24));
+
+    await tester.tap(closeButton);
+    await tester.pump();
+    expect(closeCount, 1);
 
     for (final label in ['AI', '编辑器', '任务', '通用', '关于']) {
       await tester.tap(find.text(label).first);

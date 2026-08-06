@@ -211,22 +211,11 @@ class _SettingsPageState extends State<SettingsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 8, 14),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '设置',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                ),
-              ),
-              IconButton(
-                tooltip: '关闭设置',
-                onPressed: widget.onClose,
-                icon: const Icon(Icons.close, size: 18),
-              ),
-            ],
+        const Padding(
+          padding: EdgeInsets.fromLTRB(18, 18, 18, 14),
+          child: Text(
+            '设置',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
           ),
         ),
         for (var index = 0; index < _sections.length; index++)
@@ -256,10 +245,29 @@ class _SettingsPageState extends State<SettingsPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
-          child: Text(
-            _sections[_activeSection].label,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          padding: const EdgeInsets.fromLTRB(24, 10, 12, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _sections[_activeSection].label,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '关闭设置',
+                onPressed: widget.onClose,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
+                ),
+                icon: const Icon(Icons.close, size: 18),
+              ),
+            ],
           ),
         ),
         if (_error != null)

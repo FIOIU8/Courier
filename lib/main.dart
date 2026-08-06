@@ -590,16 +590,17 @@ class _MainPageState extends State<MainPage> with WindowListener {
         children: [
           // 背景：深色渐变 + 光晕（毛玻璃的透光/折射来源）
           const Positioned.fill(child: _Background()),
-          // 悬浮布局：标题栏 / 三栏 / 状态栏 均为悬浮毛玻璃卡片
+          // 标题栏与状态栏贴边，中间三栏保留悬浮毛玻璃卡片。
           Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                child: Glass(
+              Container(
+                key: const ValueKey('window-title-bar'),
+                width: double.infinity,
+                decoration: const BoxDecoration(
                   color: kGlassHeaderBg,
-                  boxShadow: kShadowSm,
-                  child: TitleBar(onOpenSettings: _openSettings),
+                  border: Border(bottom: BorderSide(color: kGlassBorder)),
                 ),
+                child: TitleBar(onOpenSettings: _openSettings),
               ),
               Expanded(
                 child: Padding(
@@ -627,13 +628,13 @@ class _MainPageState extends State<MainPage> with WindowListener {
                   ),
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Glass(
+              const DecoratedBox(
+                key: ValueKey('window-status-bar'),
+                decoration: BoxDecoration(
                   color: kGlassHeaderBg,
-                  boxShadow: kShadowSm,
-                  child: _StatusBar(),
+                  border: Border(top: BorderSide(color: kGlassBorder)),
                 ),
+                child: SizedBox(width: double.infinity, child: _StatusBar()),
               ),
             ],
           ),

@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../services/courier_service.dart';
 import '../services/models.dart';
 import '../services/settings_state.dart';
+import 'animations.dart';
 import 'glass.dart';
 
 class AIAssistantPanel extends StatefulWidget {
@@ -104,8 +105,8 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
       if (!_scrollController.hasClients) return;
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOut,
+        duration: kAnimDurationFast,
+        curve: kAnimCurveIn,
       );
     });
   }
@@ -156,7 +157,11 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.smart_toy_outlined, size: 15, color: kPrimary),
+          Icon(
+            Icons.smart_toy_outlined,
+            size: 15,
+            color: accentColorOf(context),
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
@@ -300,10 +305,19 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
                 : canSend
                 ? _sendMessage
                 : null,
-            icon: Icon(
-              service.aiSending ? Icons.stop_circle_outlined : Icons.send,
-              size: 18,
-              color: service.aiSending || canSend ? kPrimary : Colors.white24,
+            icon: AnimatedSwitcher(
+              duration: kAnimDurationFast,
+              switchInCurve: kAnimCurveIn,
+              switchOutCurve: kAnimCurveOut,
+              transitionBuilder: kIconSwitchTransition,
+              child: Icon(
+                service.aiSending ? Icons.stop_circle_outlined : Icons.send,
+                key: ValueKey(service.aiSending),
+                size: 18,
+                color: service.aiSending || canSend
+                    ? accentColorOf(context)
+                    : Colors.white24,
+              ),
             ),
           ),
         ],
@@ -320,90 +334,108 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = message.isUser;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        mainAxisAlignment: isUser
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isUser) ...[
-            const Padding(
-              padding: EdgeInsets.only(top: 5),
-              child: Icon(Icons.smart_toy_outlined, size: 15, color: kPrimary),
+    final accent = accentColorOf(context);
+    // 新消息入场：淡入 + 轻微上移。tween 固定 0→1，流式增量更新不改变
+    // 目标值不会重启动画；仅列表滚动重建时会短暂重播（时长 120ms、位移小）。
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: kAnimDurationFast,
+      curve: kAnimCurveIn,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 8 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(
+          mainAxisAlignment: isUser
+              ? MainAxisAlignment.end
+              : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!isUser) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: Icon(Icons.smart_toy_outlined, size: 15, color: accent),
+              ),
+              const SizedBox(width: 7),
+            ],
+            Flexible(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: isUser ? accent : const Color(0xE61E2438),
+                  borderRadius: BorderRadius.circular(kRadiusMd),
+                  border: isUser ? null : Border.all(color: kGlassBorder),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (isUser)
+                      SelectableText(
+                        message.text,
+                        style: const TextStyle(fontSize: 13, height: 1.45),
+                      )
+                    else
+                      MarkdownBody(
+                        data: message.text.isEmpty ? ' ' : message.text,
+                        selectable: true,
+                        styleSheet: MarkdownStyleSheet(
+                          p: const TextStyle(
+                            fontSize: 13,
+                            height: 1.5,
+                            color: Colors.white70,
+                          ),
+                          code: const TextStyle(
+                            fontSize: 12,
+                            height: 1.45,
+                            fontFamily: 'Consolas',
+                            color: Color(0xFFE5E7EB),
+                          ),
+                          codeblockDecoration: BoxDecoration(
+                            color: const Color(0xFF111317),
+                            borderRadius: BorderRadius.circular(kRadiusSm),
+                            border: Border.all(color: kGlassBorder),
+                          ),
+                        ),
+                      ),
+                    if (!isUser && message.text.isNotEmpty)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: IconButton(
+                          tooltip: '复制回复',
+                          onPressed: () => Clipboard.setData(
+                            ClipboardData(text: message.text),
+                          ),
+                          icon: const Icon(Icons.copy, size: 13),
+                          constraints: const BoxConstraints.tightFor(
+                            width: 26,
+                            height: 24,
+                          ),
+                          padding: EdgeInsets.zero,
+                        ),
+                      ),
+                    if (message.streaming)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 1.4),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-            const SizedBox(width: 7),
           ],
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: isUser ? kPrimary : const Color(0xE61E2438),
-                borderRadius: BorderRadius.circular(kRadiusMd),
-                border: isUser ? null : Border.all(color: kGlassBorder),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (isUser)
-                    SelectableText(
-                      message.text,
-                      style: const TextStyle(fontSize: 13, height: 1.45),
-                    )
-                  else
-                    MarkdownBody(
-                      data: message.text.isEmpty ? ' ' : message.text,
-                      selectable: true,
-                      styleSheet: MarkdownStyleSheet(
-                        p: const TextStyle(
-                          fontSize: 13,
-                          height: 1.5,
-                          color: Colors.white70,
-                        ),
-                        code: const TextStyle(
-                          fontSize: 12,
-                          height: 1.45,
-                          fontFamily: 'Consolas',
-                          color: Color(0xFFE5E7EB),
-                        ),
-                        codeblockDecoration: BoxDecoration(
-                          color: const Color(0xFF111317),
-                          borderRadius: BorderRadius.circular(kRadiusSm),
-                          border: Border.all(color: kGlassBorder),
-                        ),
-                      ),
-                    ),
-                  if (!isUser && message.text.isNotEmpty)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: IconButton(
-                        tooltip: '复制回复',
-                        onPressed: () => Clipboard.setData(
-                          ClipboardData(text: message.text),
-                        ),
-                        icon: const Icon(Icons.copy, size: 13),
-                        constraints: const BoxConstraints.tightFor(
-                          width: 26,
-                          height: 24,
-                        ),
-                        padding: EdgeInsets.zero,
-                      ),
-                    ),
-                  if (message.streaming)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 4),
-                      child: SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 1.4),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

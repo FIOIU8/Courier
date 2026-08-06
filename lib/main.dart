@@ -24,6 +24,7 @@ import 'services/settings_state.dart';
 import 'services/workspace_config_service.dart';
 import 'services/workspace_service.dart';
 import 'widgets/file_tree_panel.dart';
+import 'widgets/animations.dart';
 import 'widgets/glass.dart';
 import 'widgets/editor_panel.dart';
 import 'widgets/right_panel.dart';
@@ -244,16 +245,19 @@ class CourierApp extends StatelessWidget {
         ChangeNotifierProvider<CourierService>.value(value: courierService),
         ChangeNotifierProvider<SettingsState>.value(value: settings),
       ],
-      child: MaterialApp.router(
-        title: 'Courier',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          brightness: Brightness.dark,
-          colorSchemeSeed: kPrimary,
-          useMaterial3: true,
-          fontFamily: 'Microsoft YaHei UI',
+      // 主题强调色跟随 SettingsState（自定义主题），变化时重建 MaterialApp
+      child: Consumer<SettingsState>(
+        builder: (context, settings, _) => MaterialApp.router(
+          title: 'Courier',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            brightness: Brightness.dark,
+            colorSchemeSeed: settings.accentColor,
+            useMaterial3: true,
+            fontFamily: 'Microsoft YaHei UI',
+          ),
+          routerConfig: _router,
         ),
-        routerConfig: _router,
       ),
     );
   }
@@ -269,6 +273,7 @@ class TitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = accentColorOf(context);
     return GestureDetector(
       onPanStart: (_) =>
           unawaited(_runWindowCommand(context, windowManager.startDragging)),
@@ -283,7 +288,7 @@ class TitleBar extends StatelessWidget {
               width: 20,
               height: 20,
               decoration: BoxDecoration(
-                color: kPrimary,
+                color: accent,
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Icon(
@@ -654,20 +659,26 @@ class _MainPageState extends State<MainPage> with WindowListener {
                 ),
               ),
             ),
-          // 设置卡片：动画只做位移（上浮 / 下沉），不用 opacity，
+          // 设置卡片：位移（上浮 / 下沉）+ 轻微缩放，不用 opacity，
           // 避免玻璃卡片在动画期间模糊失效。主界面不卸载、状态完整保留。
           Positioned.fill(
             child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
+              duration: kAnimDurationSlow,
+              switchInCurve: kAnimCurveIn,
+              switchOutCurve: kAnimCurveOut,
               transitionBuilder: (child, animation) {
                 return SlideTransition(
                   position: Tween<Offset>(
-                    begin: const Offset(0, 0.04),
+                    begin: const Offset(0, 0.08),
                     end: Offset.zero,
                   ).animate(animation),
-                  child: child,
+                  child: ScaleTransition(
+                    scale: Tween<double>(
+                      begin: 0.96,
+                      end: 1.0,
+                    ).animate(animation),
+                    child: child,
+                  ),
                 );
               },
               child: _showSettings

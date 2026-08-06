@@ -4,6 +4,7 @@
 // 整个内容区域支持接收文件拖拽，自动切换到任务队列并创建任务。
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import 'ai_assistant_panel.dart';
@@ -11,6 +12,7 @@ import 'git_panel.dart';
 import 'task_queue_panel.dart';
 import '../services/courier_service.dart';
 import '../services/workspace_service.dart';
+import 'animations.dart';
 import 'glass.dart';
 
 class RightPanel extends StatefulWidget {
@@ -24,12 +26,33 @@ class RightPanel extends StatefulWidget {
 
 class _RightPanelState extends State<RightPanel> {
   int _activeTab = 0;
+
+  /// Tab 切换滑动方向：1 = 新面板从右滑入（前进）；-1 = 从左滑入（后退）
+  int _slideDirection = 1;
   bool _isDragOver = false;
+
+  /// 文件拖入位置：true = 从左侧拖入（覆盖提示从左滑入）
+  bool _dragFromLeft = false;
+
+  /// 拖入文件类型限制：仅允许 Markdown / 纯文本
+  bool _isAllowedDragFile(String path) {
+    final extension = p.extension(path).toLowerCase();
+    return extension == '.md' || extension == '.txt';
+  }
+
+  void _switchTab(int index) {
+    if (index == _activeTab) return;
+    setState(() {
+      _slideDirection = index > _activeTab ? 1 : -1;
+      _activeTab = index;
+    });
+  }
 
   /// 处理拖入的文件：自动切换到任务队列 Tab 并创建任务
   void _handleDroppedFile(FileDragPayload payload) {
-    // 自动切换到任务队列 Tab
+    // 自动切换到任务队列 Tab（拖入视为前进，新面板从右滑入）
     setState(() {
+      _slideDirection = 1;
       _activeTab = 1;
       _isDragOver = false;
     });
@@ -94,7 +117,7 @@ class _RightPanelState extends State<RightPanel> {
                     label: '助手',
                     icon: Icons.smart_toy,
                     active: _activeTab == 0,
-                    onTap: () => setState(() => _activeTab = 0),
+                    onTap: () => _switchTab(0),
                   ),
                 ),
                 Expanded(
@@ -103,7 +126,7 @@ class _RightPanelState extends State<RightPanel> {
                     icon: Icons.queue,
                     badge: taskCount,
                     active: _activeTab == 1,
-                    onTap: () => setState(() => _activeTab = 1),
+                    onTap: () => _switchTab(1),
                   ),
                 ),
                 Expanded(
@@ -111,7 +134,7 @@ class _RightPanelState extends State<RightPanel> {
                     label: 'Git',
                     icon: Icons.account_tree,
                     active: _activeTab == 2,
-                    onTap: () => setState(() => _activeTab = 2),
+                    onTap: () => _switchTab(2),
                   ),
                 ),
               ],
@@ -123,7 +146,20 @@ class _RightPanelState extends State<RightPanel> {
           child: DragTarget<FileDragPayload>(
             onAcceptWithDetails: (details) => _handleDroppedFile(details.data),
             onWillAcceptWithDetails: (details) {
-              if (!_isDragOver) setState(() => _isDragOver = true);
+              // 仅接受 md / txt 文件；其余类型直接拒绝（不显示拖入提示）
+              if (!_isAllowedDragFile(details.data.path)) return false;
+              if (!_isDragOver) {
+                // 记录拖入位置，决定覆盖提示的滑入方向
+                final box = context.findRenderObject() as RenderBox?;
+                final local = box != null
+                    ? box.globalToLocal(details.offset)
+                    : details.offset;
+                setState(() {
+                  _dragFromLeft =
+                      local.dx < (box?.size.width ?? double.infinity) / 2;
+                  _isDragOver = true;
+                });
+              }
               return true;
             },
             onLeave: (_) {
@@ -132,59 +168,188 @@ class _RightPanelState extends State<RightPanel> {
             builder: (context, candidateData, rejectedData) {
               return Stack(
                 children: [
-                  switch (_activeTab) {
-                    0 => AIAssistantPanel(
-                      workspacePath: ws.workspacePath,
-                      onOpenSettings: widget.onOpenSettings,
-                    ),
-                    1 => TaskQueuePanel(onOpenSettings: widget.onOpenSettings),
-                    _ => GitPanel(key: ValueKey(ws.workspacePath)),
-                  },
-                  // 拖拽时的全屏覆盖提示
-                  if (_isDragOver)
-                    Positioned.fill(
-                      child: Container(
-                        color: kGlassSelectedBg,
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 24,
-                              vertical: 16,
-                            ),
-                            decoration: BoxDecoration(
-                              color: kGlassFloatBg,
-                              borderRadius: BorderRadius.circular(kRadiusLg),
-                              border: Border.all(
-                                color: kPrimaryLight.withValues(alpha: 0.5),
-                                width: 1.5,
-                              ),
-                              boxShadow: kShadowLg,
-                            ),
-                            child: const Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.download,
-                                  size: 32,
-                                  color: kPrimaryLight,
-                                ),
-                                SizedBox(height: 8),
-                                Text(
-                                  '松开创建任务',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    color: kPrimaryLight,
+                  // 内容区切换动画：反向推入。
+                  // 前进（如 助手→任务）时新面板从右滑入、旧面板向左滑出；
+                  // 后退时新面板从左滑入、旧面板向右滑出（方向相反不重叠）。
+                  // 位于外层 Glass 内部，不影响毛玻璃模糊。
+                  _SlideSwitcher(
+                    direction: _slideDirection,
+                    child: switch (_activeTab) {
+                      0 => AIAssistantPanel(
+                        key: const ValueKey('assistant-panel'),
+                        workspacePath: ws.workspacePath,
+                        onOpenSettings: widget.onOpenSettings,
+                      ),
+                      1 => TaskQueuePanel(
+                        key: const ValueKey('task-panel'),
+                        onOpenSettings: widget.onOpenSettings,
+                      ),
+                      _ => GitPanel(
+                        key: ValueKey('git-panel-${ws.workspacePath}'),
+                      ),
+                    },
+                  ),
+                  // 拖拽时的全屏覆盖提示：从文件拖入的方向滑入/滑出
+                  Positioned.fill(
+                    child: AnimatedSwitcher(
+                      duration: kAnimDurationMed,
+                      switchInCurve: kAnimCurveIn,
+                      switchOutCurve: kAnimCurveOut,
+                      transitionBuilder: (child, animation) {
+                        return SlideTransition(
+                          position: Tween<Offset>(
+                            begin: Offset(_dragFromLeft ? -1 : 1, 0),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        );
+                      },
+                      child: _isDragOver
+                          ? Container(
+                              key: const ValueKey('drag-overlay'),
+                              color: kGlassSelectedBg,
+                              child: Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 16,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: kGlassFloatBg,
+                                    borderRadius: BorderRadius.circular(
+                                      kRadiusLg,
+                                    ),
+                                    border: Border.all(
+                                      color: accentLightOf(
+                                        context,
+                                      ).withValues(alpha: 0.5),
+                                      width: 1.5,
+                                    ),
+                                    boxShadow: kShadowLg,
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.download,
+                                        size: 32,
+                                        color: accentLightOf(context),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        '松开创建任务',
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          color: accentLightOf(context),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
+                              ),
+                            )
+                          : const SizedBox.shrink(
+                              key: ValueKey('drag-overlay-none'),
                             ),
-                          ),
-                        ),
-                      ),
                     ),
+                  ),
                 ],
               );
             },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 反向推入式面板切换容器：
+/// 新面板从 [direction] 一侧滑入，旧面板向相反一侧滑出（方向相反、互不重叠）。
+/// 用 child 的 key 变化触发切换；动画期间旧面板不可交互。
+class _SlideSwitcher extends StatefulWidget {
+  final Widget child;
+
+  /// 切换方向：1 = 前进（新面板从右滑入、旧面板向左滑出）；
+  /// -1 = 后退（新面板从左滑入、旧面板向右滑出）。
+  final int direction;
+
+  const _SlideSwitcher({required this.child, required this.direction});
+
+  @override
+  State<_SlideSwitcher> createState() => _SlideSwitcherState();
+}
+
+class _SlideSwitcherState extends State<_SlideSwitcher>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _inAnimation;
+  late final Animation<double> _outAnimation;
+  Widget? _previousChild;
+  int _previousDirection = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: kAnimDurationMed)
+      // 初始为完成态：当前面板静止在原位（position = Offset.zero），
+      // 避免初始 value=0 时 SlideTransition 停在 begin 导致首屏空白。
+      ..value = 1
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          // 仅移除旧面板，不复位 controller：复位会让新面板的
+          // SlideTransition 回到 begin（移出屏幕）导致内容空白。
+          setState(() => _previousChild = null);
+        }
+      });
+    _inAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveIn);
+    _outAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveOut);
+  }
+
+  @override
+  void didUpdateWidget(_SlideSwitcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.child.key != oldWidget.child.key) {
+      // 固化本次切换方向：旧面板向相反一侧滑出（前进时向左、后退时向右）
+      _previousChild = oldWidget.child;
+      _previousDirection = widget.direction;
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (_previousChild != null)
+          AnimatedBuilder(
+            animation: _outAnimation,
+            // 直接传递旧面板 widget（不额外包装），保证同 key 时 Element 复用、
+            // State 保留；Stack 上层的新面板会挡住对旧面板的点击，无需 IgnorePointer。
+            child: _previousChild!,
+            builder: (context, child) => SlideTransition(
+              position: Tween<Offset>(
+                begin: Offset.zero,
+                end: Offset(-_previousDirection.toDouble(), 0),
+              ).animate(_outAnimation),
+              child: child,
+            ),
+          ),
+        AnimatedBuilder(
+          animation: _inAnimation,
+          child: widget.child,
+          builder: (context, child) => SlideTransition(
+            position: Tween<Offset>(
+              begin: Offset(widget.direction.toDouble(), 0),
+              end: Offset.zero,
+            ).animate(_inAnimation),
+            child: child,
           ),
         ),
       ],
@@ -209,14 +374,16 @@ class _SegTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = accentColorOf(context);
+    final accentLight = accentLightOf(context);
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      curve: Curves.easeOutCubic,
+      duration: kAnimDurationFast,
+      curve: kAnimCurveIn,
       decoration: BoxDecoration(
-        color: active ? kPrimary.withValues(alpha: 0.18) : Colors.transparent,
+        color: active ? accent.withValues(alpha: 0.18) : Colors.transparent,
         borderRadius: BorderRadius.circular(kRadiusSm),
         border: Border.all(
-          color: active ? kPrimary.withValues(alpha: 0.45) : Colors.transparent,
+          color: active ? accent.withValues(alpha: 0.45) : Colors.transparent,
         ),
       ),
       child: InkWell(
@@ -230,7 +397,7 @@ class _SegTab extends StatelessWidget {
               Icon(
                 icon,
                 size: 16,
-                color: active ? kPrimaryLight : Colors.white54,
+                color: active ? accentLight : Colors.white54,
               ),
               const SizedBox(width: 5),
               Text(
@@ -250,13 +417,13 @@ class _SegTab extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: active
-                        ? kPrimary.withValues(alpha: 0.3)
+                        ? accent.withValues(alpha: 0.3)
                         : kGlassChipBg,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     '$badge',
-                    style: const TextStyle(fontSize: 12, color: kPrimaryLight),
+                    style: TextStyle(fontSize: 12, color: accentLight),
                   ),
                 ),
               ],

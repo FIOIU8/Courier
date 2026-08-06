@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../services/courier_service.dart';
 import '../services/models.dart';
 import '../services/settings_state.dart';
+import 'animations.dart';
 import 'glass.dart';
 
 class TaskQueuePanel extends StatefulWidget {
@@ -44,7 +45,18 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
         _buildSummary(service.queueSummary),
         if (displayedError != null) _buildErrorBar(displayedError),
         Expanded(child: _buildTaskList(tasks)),
-        if (selected != null) _buildTaskDetail(selected),
+        // 详情区展开/收起：AnimatedSize 平滑高度过渡（0↔内容高），
+        // 宽度固定为面板宽，仅高度变化；收起时高度即时开始收缩，
+        // 不会出现"先淡出再收缩"的串行空白。
+        AnimatedSize(
+          duration: kAnimDurationMed,
+          curve: kAnimCurveIn,
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: double.infinity,
+            child: selected != null ? _buildTaskDetail(selected) : null,
+          ),
+        ),
       ],
     );
   }
@@ -61,7 +73,7 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.queue_outlined, size: 15, color: kPrimary),
+          Icon(Icons.queue_outlined, size: 15, color: accentColorOf(context)),
           const SizedBox(width: 6),
           Text(
             '并发 ${settings.maxConcurrent}',
@@ -76,12 +88,19 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
           IconButton(
             tooltip: running ? '暂停队列' : '启动队列',
             onPressed: _queueActionPending ? null : _toggleQueue,
-            icon: Icon(
-              running ? Icons.pause : Icons.play_arrow,
-              size: 17,
-              color: running
-                  ? const Color(0xFFF59E0B)
-                  : const Color(0xFF10B981),
+            icon: AnimatedSwitcher(
+              duration: kAnimDurationFast,
+              switchInCurve: kAnimCurveIn,
+              switchOutCurve: kAnimCurveOut,
+              transitionBuilder: kIconSwitchTransition,
+              child: Icon(
+                running ? Icons.pause : Icons.play_arrow,
+                key: ValueKey(running),
+                size: 17,
+                color: running
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFF10B981),
+              ),
             ),
           ),
           IconButton(
@@ -95,6 +114,7 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
   }
 
   Widget _buildSummary(QueueSummary summary) {
+    final accent = accentColorOf(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: const BoxDecoration(
@@ -105,7 +125,7 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
         children: [
           _StatChip('总', summary.total, Colors.white54),
           const SizedBox(width: 3),
-          _StatChip('排队', summary.queued, kPrimary),
+          _StatChip('排队', summary.queued, accent),
           const SizedBox(width: 3),
           _StatChip('运行', summary.running, const Color(0xFFF59E0B)),
           const SizedBox(width: 3),
@@ -181,22 +201,44 @@ class _TaskQueuePanelState extends State<TaskQueuePanel> {
         ),
       );
     }
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      itemCount: tasks.length,
-      separatorBuilder: (_, _) => const Divider(height: 1, color: kGlassBorder),
-      itemBuilder: (context, index) {
-        final task = tasks[index];
-        return _TaskRow(
-          task: task,
-          selected: task.id == _selectedTaskId,
-          pending: _pendingTaskIds.contains(task.id),
-          onSelect: () => _selectTask(task.id),
-          onCancel: () => _cancelTask(task.id),
-          onRetry: () => _retryTask(task.id),
-          onDelete: () => _confirmDelete(task),
+    // 仅任务增删/筛选变化时整列表淡入；状态与进度更新走行内动画，不触发列表级动画。
+    final signature = tasks.map((task) => task.id).join(',');
+    return AnimatedSwitcher(
+      duration: kAnimDurationMed,
+      switchInCurve: kAnimCurveIn,
+      switchOutCurve: kAnimCurveOut,
+      transitionBuilder: kPanelSwitchTransition,
+      layoutBuilder: (currentChild, previousChildren) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // 旧列表淡出期间不可交互，避免误触
+            for (final child in previousChildren) IgnorePointer(child: child),
+            ?currentChild,
+          ],
         );
       },
+      child: KeyedSubtree(
+        key: ValueKey(signature),
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          itemCount: tasks.length,
+          separatorBuilder: (_, _) =>
+              const Divider(height: 1, color: kGlassBorder),
+          itemBuilder: (context, index) {
+            final task = tasks[index];
+            return _TaskRow(
+              task: task,
+              selected: task.id == _selectedTaskId,
+              pending: _pendingTaskIds.contains(task.id),
+              onSelect: () => _selectTask(task.id),
+              onCancel: () => _cancelTask(task.id),
+              onRetry: () => _retryTask(task.id),
+              onDelete: () => _confirmDelete(task),
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -571,7 +613,8 @@ class _TaskRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (color, icon, label) = _statusInfo(task.status);
+    final accent = accentColorOf(context);
+    final (color, icon, label) = _statusInfo(task.status, accent);
     final cancellable =
         task.status == TaskStatus.queued ||
         task.status == TaskStatus.running ||
@@ -580,105 +623,128 @@ class _TaskRow extends StatelessWidget {
         task.status == TaskStatus.failed && task.attempt < task.maxAttempts;
     final deletable = TaskStatus.isTerminal(task.status);
 
-    return Material(
+    return AnimatedContainer(
+      duration: kAnimDurationFast,
+      curve: kAnimCurveIn,
       color: selected ? kGlassSelectedBg : Colors.transparent,
-      child: InkWell(
-        onTap: onSelect,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
-          child: Row(
-            children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      task.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.white70,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Text(
-                          label,
-                          style: TextStyle(fontSize: 10, color: color),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: LinearProgressIndicator(
-                            value: task.progress,
-                            minHeight: 2,
-                            backgroundColor: kGlassChipBg,
-                            color: color,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (pending)
-                const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(strokeWidth: 1.4),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onSelect,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+            child: Row(
+              children: [
+                AnimatedSwitcher(
+                  duration: kAnimDurationFast,
+                  switchInCurve: kAnimCurveIn,
+                  switchOutCurve: kAnimCurveOut,
+                  transitionBuilder: kIconSwitchTransition,
+                  child: Icon(
+                    icon,
+                    key: ValueKey('${task.id}-${task.status}'),
+                    size: 15,
+                    color: color,
                   ),
-                )
-              else if (cancellable)
-                IconButton(
-                  tooltip: '取消任务',
-                  onPressed: task.status == TaskStatus.cancelling
-                      ? null
-                      : onCancel,
-                  icon: const Icon(Icons.stop_circle_outlined, size: 15),
-                )
-              else if (retryable)
-                IconButton(
-                  tooltip: '重试任务',
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.replay, size: 15),
-                )
-              else if (deletable)
-                IconButton(
-                  tooltip: '删除任务',
-                  onPressed: onDelete,
-                  icon: const Icon(Icons.delete_outline, size: 15),
                 ),
-            ],
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white70,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          AnimatedDefaultTextStyle(
+                            duration: kAnimDurationFast,
+                            curve: kAnimCurveIn,
+                            style: TextStyle(fontSize: 10, color: color),
+                            child: Text(label),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: LinearProgressIndicator(
+                              value: task.progress,
+                              minHeight: 2,
+                              backgroundColor: kGlassChipBg,
+                              color: color,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (pending)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: SizedBox(
+                      width: 13,
+                      height: 13,
+                      child: CircularProgressIndicator(strokeWidth: 1.4),
+                    ),
+                  )
+                else if (cancellable)
+                  IconButton(
+                    tooltip: '取消任务',
+                    onPressed: task.status == TaskStatus.cancelling
+                        ? null
+                        : onCancel,
+                    icon: const Icon(Icons.stop_circle_outlined, size: 15),
+                  )
+                else if (retryable)
+                  IconButton(
+                    tooltip: '重试任务',
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.replay, size: 15),
+                  )
+                else if (deletable)
+                  IconButton(
+                    tooltip: '删除任务',
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete_outline, size: 15),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  (Color, IconData, String) _statusInfo(String status) => switch (status) {
-    TaskStatus.succeeded => (
-      const Color(0xFF10B981),
-      Icons.check_circle_outline,
-      '完成',
-    ),
-    TaskStatus.running => (
-      const Color(0xFFF59E0B),
-      Icons.play_circle_outline,
-      '运行',
-    ),
-    TaskStatus.queued => (kPrimary, Icons.schedule, '排队'),
-    TaskStatus.failed => (const Color(0xFFEF4444), Icons.error_outline, '失败'),
-    TaskStatus.cancelling => (
-      const Color(0xFFF59E0B),
-      Icons.pending_outlined,
-      '取消中',
-    ),
-    TaskStatus.cancelled => (Colors.white38, Icons.cancel_outlined, '已取消'),
-    _ => (Colors.white38, Icons.circle_outlined, status),
-  };
+  (Color, IconData, String) _statusInfo(String status, Color accent) =>
+      switch (status) {
+        TaskStatus.succeeded => (
+          const Color(0xFF10B981),
+          Icons.check_circle_outline,
+          '完成',
+        ),
+        TaskStatus.running => (
+          const Color(0xFFF59E0B),
+          Icons.play_circle_outline,
+          '运行',
+        ),
+        TaskStatus.queued => (accent, Icons.schedule, '排队'),
+        TaskStatus.failed => (
+          const Color(0xFFEF4444),
+          Icons.error_outline,
+          '失败',
+        ),
+        TaskStatus.cancelling => (
+          const Color(0xFFF59E0B),
+          Icons.pending_outlined,
+          '取消中',
+        ),
+        TaskStatus.cancelled => (Colors.white38, Icons.cancel_outlined, '已取消'),
+        _ => (Colors.white38, Icons.circle_outlined, status),
+      };
 }

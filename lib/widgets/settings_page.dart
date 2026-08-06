@@ -41,9 +41,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   int _activeSection = 0;
 
-  /// 区块切换滑动方向：1 = 新区块从右滑入；-1 = 从左滑入
-  int _sectionSlideDirection = 1;
-
   bool _savingProvider = false;
   String? _error;
   bool _errorCopied = false;
@@ -299,10 +296,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               onTap: () {
                 if (index == _activeSection) return;
-                setState(() {
-                  _sectionSlideDirection = index > _activeSection ? 1 : -1;
-                  _activeSection = index;
-                });
+                setState(() => _activeSection = index);
               },
             ),
           ),
@@ -401,7 +395,6 @@ class _SettingsPageState extends State<SettingsPage> {
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
             child: _VerticalSlideSwitcher(
-              direction: _sectionSlideDirection,
               child: KeyedSubtree(
                 key: ValueKey(_activeSection),
                 child: switch (_activeSection) {
@@ -1631,11 +1624,13 @@ class _SettingsPageState extends State<SettingsPage> {
 /// direction = 1（向下切换）：新区块从下滑入、旧区块向上滑出（同向上移）；
 /// direction = -1（向上切换）：新区块从上滑入、旧区块向下滑出（同向下移）。
 /// 用 child 的 key 变化触发切换；旧区块直接透传保证 State 保留。
+/// 淡入式区块切换容器：
+/// 子区块 key 变化时立即移除旧区块、新区块原位淡入，
+/// 淡入期间用不透明面板底色遮盖，避免透明区块露出旧内容或背景。
 class _VerticalSlideSwitcher extends StatefulWidget {
   final Widget child;
-  final int direction;
 
-  const _VerticalSlideSwitcher({required this.child, required this.direction});
+  const _VerticalSlideSwitcher({required this.child});
 
   @override
   State<_VerticalSlideSwitcher> createState() => _VerticalSlideSwitcherState();
@@ -1645,33 +1640,29 @@ class _VerticalSlideSwitcherState extends State<_VerticalSlideSwitcher>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _inAnimation;
-  late final Animation<double> _outAnimation;
-  Widget? _previousChild;
-  int _previousDirection = 1;
+
+  /// 是否正在切换：淡入期间遮盖底色，完成后淡出遮盖
+  bool _switching = false;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this, duration: kAnimDurationMed)
-      // 初始为完成态：当前区块静止在原位（position = Offset.zero）
+      // 初始为完成态：当前区块完全可见（opacity = 1）
       ..value = 1
       ..addStatusListener((status) {
         if (status == AnimationStatus.completed) {
-          // 仅移除旧区块，不复位 controller（复位会回到 begin 移出屏幕）
-          setState(() => _previousChild = null);
+          setState(() => _switching = false);
         }
       });
     _inAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveIn);
-    // 新旧区块使用同一曲线：同时起步、同步加速、同时到位（避免旧区块延迟感）
-    _outAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveIn);
   }
 
   @override
   void didUpdateWidget(_VerticalSlideSwitcher oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.child.key != oldWidget.child.key) {
-      _previousChild = oldWidget.child;
-      _previousDirection = widget.direction;
+      _switching = true;
       _controller.forward(from: 0);
     }
   }
@@ -1684,50 +1675,25 @@ class _VerticalSlideSwitcherState extends State<_VerticalSlideSwitcher>
 
   @override
   Widget build(BuildContext context) {
-    final shift = 0.15 * _previousDirection;
-    // 切换动画期间在区块下方铺一层不透明面板底色：区块主体透明，
-    // 否则滑动时会露出设置卡片背后的背景；完成后淡出遮盖恢复原样。
-    final covering = _previousChild != null;
     return Stack(
       alignment: Alignment.topLeft,
       children: [
+        // 遮盖层：淡入期间遮挡背景，完成后淡出恢复原样
         Positioned.fill(
           child: AnimatedOpacity(
-            opacity: covering ? 1.0 : 0.0,
-            duration: covering ? Duration.zero : kAnimDurationFast,
+            opacity: _switching ? 1.0 : 0.0,
+            duration: _switching ? Duration.zero : kAnimDurationFast,
             curve: kAnimCurveIn,
             child: ColoredBox(color: glassSurfaceSolidColor(context)),
           ),
         ),
-        if (_previousChild != null)
-          AnimatedBuilder(
-            animation: _outAnimation,
-            child: _previousChild!,
-            builder: (context, child) => FadeTransition(
-              // 旧区块滑出时渐隐（1→0），与新区块互补透明、避免文字重叠
-              opacity: Tween<double>(begin: 1, end: 0).animate(_outAnimation),
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: Offset.zero,
-                  end: Offset(0, -shift),
-                ).animate(_outAnimation),
-                child: child,
-              ),
-            ),
-          ),
+        // 新区块原位淡入（旧区块已随 key 变化被立即移除）
         AnimatedBuilder(
           animation: _inAnimation,
           child: widget.child,
           builder: (context, child) => FadeTransition(
-            // 新区块滑入时渐显（0→1）
             opacity: Tween<double>(begin: 0, end: 1).animate(_inAnimation),
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: Offset(0, shift),
-                end: Offset.zero,
-              ).animate(_inAnimation),
-              child: child,
-            ),
+            child: child,
           ),
         ),
       ],

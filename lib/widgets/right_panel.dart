@@ -26,9 +26,6 @@ class RightPanel extends StatefulWidget {
 
 class _RightPanelState extends State<RightPanel> {
   int _activeTab = 0;
-
-  /// Tab 切换滑动方向：1 = 新面板从右滑入（前进）；-1 = 从左滑入（后退）
-  int _slideDirection = 1;
   bool _isDragOver = false;
 
   /// 文件拖入位置：true = 从左侧拖入（覆盖提示从左滑入）
@@ -42,17 +39,13 @@ class _RightPanelState extends State<RightPanel> {
 
   void _switchTab(int index) {
     if (index == _activeTab) return;
-    setState(() {
-      _slideDirection = index > _activeTab ? 1 : -1;
-      _activeTab = index;
-    });
+    setState(() => _activeTab = index);
   }
 
   /// 处理拖入的文件：自动切换到任务队列 Tab 并创建任务
   void _handleDroppedFile(FileDragPayload payload) {
-    // 自动切换到任务队列 Tab（拖入视为前进，新面板从右滑入）
+    // 自动切换到任务队列 Tab
     setState(() {
-      _slideDirection = 1;
       _activeTab = 1;
       _isDragOver = false;
     });
@@ -168,12 +161,10 @@ class _RightPanelState extends State<RightPanel> {
             builder: (context, candidateData, rejectedData) {
               return Stack(
                 children: [
-                  // 内容区切换动画：反向推入。
-                  // 前进（如 助手→任务）时新面板从右滑入、旧面板向左滑出；
-                  // 后退时新面板从左滑入、旧面板向右滑出（方向相反不重叠）。
+                  // 内容区切换：立即移除旧页面、新页面原位淡入，
+                  // 切换期间用不透明底色遮盖，避免旧页面/背景露出来。
                   // 位于外层 Glass 内部，不影响毛玻璃模糊。
                   _SlideSwitcher(
-                    direction: _slideDirection,
                     child: switch (_activeTab) {
                       0 => AIAssistantPanel(
                         key: const ValueKey('assistant-panel'),
@@ -263,17 +254,13 @@ class _RightPanelState extends State<RightPanel> {
   }
 }
 
-/// 反向推入式面板切换容器：
-/// 新面板从 [direction] 一侧滑入，旧面板向相反一侧滑出（方向相反、互不重叠）。
-/// 用 child 的 key 变化触发切换；动画期间旧面板不可交互。
+/// 淡入式面板切换容器：
+/// 子页面 key 变化时立即移除旧页面、新页面在原位淡入，
+/// 淡入期间用不透明面板底色遮盖，避免透明页面露出旧内容或背景。
 class _SlideSwitcher extends StatefulWidget {
   final Widget child;
 
-  /// 切换方向：1 = 前进（新面板从右滑入、旧面板向左滑出）；
-  /// -1 = 后退（新面板从左滑入、旧面板向右滑出）。
-  final int direction;
-
-  const _SlideSwitcher({required this.child, required this.direction});
+  const _SlideSwitcher({required this.child});
 
   @override
   State<_SlideSwitcher> createState() => _SlideSwitcherState();
@@ -283,35 +270,29 @@ class _SlideSwitcherState extends State<_SlideSwitcher>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _inAnimation;
-  late final Animation<double> _outAnimation;
-  Widget? _previousChild;
-  int _previousDirection = 1;
+
+  /// 是否正在切换：淡入期间遮盖底色，完成后淡出遮盖
+  bool _switching = false;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this, duration: kAnimDurationMed)
-      // 初始为完成态：当前面板静止在原位（position = Offset.zero），
-      // 避免初始 value=0 时 SlideTransition 停在 begin 导致首屏空白。
+      // 初始为完成态：当前页面完全可见（opacity = 1）
       ..value = 1
       ..addStatusListener((status) {
         if (status == AnimationStatus.completed) {
-          // 仅移除旧面板，不复位 controller：复位会让新面板的
-          // SlideTransition 回到 begin（移出屏幕）导致内容空白。
-          setState(() => _previousChild = null);
+          setState(() => _switching = false);
         }
       });
     _inAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveIn);
-    _outAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveOut);
   }
 
   @override
   void didUpdateWidget(_SlideSwitcher oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.child.key != oldWidget.child.key) {
-      // 固化本次切换方向：旧面板向相反一侧滑出（前进时向左、后退时向右）
-      _previousChild = oldWidget.child;
-      _previousDirection = widget.direction;
+      _switching = true;
       _controller.forward(from: 0);
     }
   }
@@ -324,43 +305,24 @@ class _SlideSwitcherState extends State<_SlideSwitcher>
 
   @override
   Widget build(BuildContext context) {
-    // 切换动画期间在页面层下方铺一层不透明面板底色：面板主体是透明的，
-    // 若不加遮盖，滑动时新旧页面并排会直接露出背后的背景图片；
-    // 切换完成后淡出遮盖，恢复面板的实际透明度。
-    final covering = _previousChild != null;
     return Stack(
       fit: StackFit.expand,
       children: [
+        // 遮盖层：淡入期间遮挡背景，完成后淡出恢复面板实际透明度
         Positioned.fill(
           child: AnimatedOpacity(
-            opacity: covering ? 1.0 : 0.0,
-            duration: covering ? Duration.zero : kAnimDurationFast,
+            opacity: _switching ? 1.0 : 0.0,
+            duration: _switching ? Duration.zero : kAnimDurationFast,
             curve: kAnimCurveIn,
             child: ColoredBox(color: glassSurfaceSolidColor(context)),
           ),
         ),
-        if (_previousChild != null)
-          AnimatedBuilder(
-            animation: _outAnimation,
-            // 直接传递旧面板 widget（不额外包装），保证同 key 时 Element 复用、
-            // State 保留；Stack 上层的新面板会挡住对旧面板的点击，无需 IgnorePointer。
-            child: _previousChild!,
-            builder: (context, child) => SlideTransition(
-              position: Tween<Offset>(
-                begin: Offset.zero,
-                end: Offset(-_previousDirection.toDouble(), 0),
-              ).animate(_outAnimation),
-              child: child,
-            ),
-          ),
+        // 新页面原位淡入（旧页面已随 key 变化被立即移除）
         AnimatedBuilder(
           animation: _inAnimation,
           child: widget.child,
-          builder: (context, child) => SlideTransition(
-            position: Tween<Offset>(
-              begin: Offset(widget.direction.toDouble(), 0),
-              end: Offset.zero,
-            ).animate(_inAnimation),
+          builder: (context, child) => FadeTransition(
+            opacity: Tween<double>(begin: 0, end: 1).animate(_inAnimation),
             child: child,
           ),
         ),

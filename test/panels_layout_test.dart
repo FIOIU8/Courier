@@ -10,6 +10,7 @@ import 'package:courier_flutter/services/workspace_config_service.dart';
 import 'package:courier_flutter/services/workspace_service.dart';
 import 'package:courier_flutter/widgets/ai_assistant_panel.dart';
 import 'package:courier_flutter/widgets/right_panel.dart';
+import 'package:courier_flutter/widgets/task_queue_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -75,7 +76,7 @@ void main() {
     }
   }, timeout: const Timeout(Duration(seconds: 20)));
 
-  testWidgets('右栏 Tab 切换为反向推入动画（新旧面板滑动方向相反）', (tester) async {
+  testWidgets('右栏 Tab 切换为原位淡入（旧面板立即移除、无滑动暴露）', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final secureStorage = SecureStorageService(store: MemoryCredentialStore());
     final settings = SettingsState(
@@ -123,39 +124,30 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
+    // 切换不再使用滑动，任何时刻都不应存在位移残留
     List<double> activeDx() => tester
         .widgetList<SlideTransition>(find.byType(SlideTransition))
         .where((w) => w.position.value != Offset.zero)
         .map((w) => w.position.value.dx)
         .toList();
 
-    // 初始面板应静止在原位（无位移残留，否则被移出屏幕导致空白）
+    // 初始助手面板应静止可见
     expect(activeDx(), isEmpty, reason: '初始面板应静止原位');
     expect(find.text('新会话'), findsOneWidget, reason: '初始助手面板应可见');
 
-    // 前进：助手 → 任务，旧面板向左滑出（dx<0）、新面板从右滑入（dx>0）
+    // 切到任务：旧面板立即移除，任务面板可见
     await tester.tap(find.text('任务').first);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 60));
-    final forward = activeDx();
-    expect(forward.any((dx) => dx > 0), isTrue, reason: '前进时新面板应从右滑入');
-    expect(forward.any((dx) => dx < 0), isTrue, reason: '前进时旧面板应向左滑出');
+    expect(find.text('新会话'), findsNothing, reason: '旧助手面板应立即移除');
     await tester.pumpAndSettle();
+    expect(activeDx(), isEmpty, reason: '切换后无位移残留');
+    expect(find.byType(TaskQueuePanel), findsOneWidget, reason: '任务面板应可见');
 
-    // 后退：任务 → 助手，新面板从左滑入（dx<0）、旧面板向右滑出（dx>0）
+    // 切回助手：助手面板重新可见
     await tester.tap(find.text('助手').first);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 60));
-    final backward = activeDx();
-    expect(backward.any((dx) => dx < 0), isTrue, reason: '后退时新面板应从左滑入');
-    expect(backward.any((dx) => dx > 0), isTrue, reason: '后退时旧面板应向右滑出');
     await tester.pumpAndSettle();
-
-    // 切换完成后不得有位移残留（否则当前面板被移出屏幕导致空白）
-    final settled = activeDx();
-    expect(settled, isEmpty, reason: '切换完成后当前面板应静止在原位');
-
-    // 当前面板内容应可见
+    expect(activeDx(), isEmpty);
     expect(find.text('新会话'), findsOneWidget, reason: '助手面板内容应可见');
     expect(tester.takeException(), isNull);
   }, timeout: const Timeout(Duration(seconds: 20)));

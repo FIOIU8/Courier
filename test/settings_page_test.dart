@@ -645,7 +645,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('设置页区块切换为同向上下滑动', (WidgetTester tester) async {
+  testWidgets('设置页区块切换为原位淡入（旧区块立即移除、无滑动暴露）', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
     final settings = SettingsState(
@@ -691,26 +691,22 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // 向下切换：供应商 → 编辑器（direction = 1）
+    // 初始供应商区块可见
+    expect(find.text('添加自定义供应商'), findsOneWidget, reason: '初始供应商区块应可见');
+
+    // 切到编辑器：旧区块立即移除，编辑器区块可见
     await tester.tap(find.text('编辑器').first);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 80));
-    final dys = tester
-        .widgetList<SlideTransition>(find.byType(SlideTransition))
-        .where((w) => w.position.value != Offset.zero)
-        .map((w) => w.position.value.dy)
-        .toList();
-    // 同向上移的中间态：新区块在下方（dy>0）滑入、旧区块在上方（dy<0）滑出
-    expect(dys.any((dy) => dy > 0), isTrue, reason: '新区块应从下滑入（dy>0）');
-    expect(dys.any((dy) => dy < 0), isTrue, reason: '旧区块应向上滑出（dy<0）');
+    expect(find.text('添加自定义供应商'), findsNothing, reason: '旧区块应立即移除');
     await tester.pumpAndSettle();
 
-    // 切换完成后无位移残留（不空白）
-    final settled = tester
+    // 切换不再使用滑动：任何时刻无位移残留
+    final slideResidue = tester
         .widgetList<SlideTransition>(find.byType(SlideTransition))
         .where((w) => w.position.value != Offset.zero)
         .toList();
-    expect(settled, isEmpty, reason: '切换完成后应静止原位');
+    expect(slideResidue, isEmpty, reason: '切换后无位移残留');
+    expect(find.text('自动保存'), findsOneWidget, reason: '编辑器区块应可见');
     expect(tester.takeException(), isNull);
   });
 

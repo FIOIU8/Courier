@@ -5,6 +5,10 @@
 
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../services/settings_state.dart';
+import 'animations.dart';
 
 // ============================================================
 // 一、统一视觉参数（调整入口）
@@ -56,10 +60,20 @@ const Color kGlassSelectedBg = Color(0x266366F1);
 const Color kGlassBorder = Color(0x1F615775);
 
 /// 主色调（对齐原 React 版 Courier：teal 青色 hsl(172, 68%, 43%)）
+/// 默认强调色；自定义主题启用后请使用 [accentColorOf]/[accentLightOf] 动态读取。
 const Color kPrimary = Color(0xFF23B8A4);
 
 /// 主色调浅色
 const Color kPrimaryLight = Color(0xFF55D6C0);
+
+/// 从 [SettingsState] 动态读取当前强调色（自定义主题）。
+/// 调用方需位于 Provider 树内且处于 build 上下文（触发主题色变化重建）。
+Color accentColorOf(BuildContext context) =>
+    context.watch<SettingsState>().accentColor;
+
+/// 从 [SettingsState] 动态读取当前强调色浅色。
+Color accentLightOf(BuildContext context) =>
+    context.watch<SettingsState>().accentLightColor;
 
 /// 统一对话框圆角与边框样式
 ShapeBorder get kDialogShape => RoundedRectangleBorder(
@@ -107,12 +121,16 @@ class Glass extends StatelessWidget {
       child: child,
     );
 
-    if (kEnableGlass) {
+    // 毛玻璃模糊运行时开关与强度（自定义主题外观设置）。
+    // 关闭或强度为 0 时自动退化为半透明圆角卡片。
+    final settings = context.watch<SettingsState>();
+    final sigma = settings.blurSigma;
+    if (settings.glassEnabled && sigma > 0) {
       inner = ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         clipBehavior: clipBehavior,
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: kBlurSigma, sigmaY: kBlurSigma),
+          filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
           child: inner,
         ),
       );
@@ -180,7 +198,7 @@ class _HoverCardState extends State<HoverCard> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
+          duration: kAnimDurationFast,
           curve: Curves.easeOutBack,
           margin: widget.margin,
           padding: widget.padding,

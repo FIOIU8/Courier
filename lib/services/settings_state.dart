@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show Color, Colors;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_error.dart';
@@ -22,6 +23,29 @@ class SettingsState extends ChangeNotifier {
   static const int _maxCustomProviders = 50;
   static const String _customProvidersKey = 'custom_ai_providers';
   static final Random _secureRandom = Random.secure();
+
+  /// 默认强调色（teal，对齐原项目主色调）
+  static const int defaultAccentColorValue = 0xFF23B8A4;
+
+  /// 自定义主题的预设强调色色板
+  static const List<Color> accentPalette = [
+    Color(0xFF23B8A4), // teal
+    Color(0xFF3B82F6), // blue
+    Color(0xFF8B5CF6), // purple
+    Color(0xFFF59E0B), // amber
+    Color(0xFFEC4899), // pink
+    Color(0xFF10B981), // green
+  ];
+
+  /// 与 [accentPalette] 一一对应的名称
+  static const List<String> accentPaletteNames = [
+    '青绿',
+    '蓝',
+    '紫',
+    '琥珀',
+    '粉',
+    '绿',
+  ];
 
   final SecureStorageService secureStorage;
   final PreferencesLoader _preferencesLoader;
@@ -42,6 +66,13 @@ class SettingsState extends ChangeNotifier {
   bool _restoreWorkspace = true;
   bool _showHiddenFiles = false;
   AppLogLevel _logLevel = AppLogLevel.info;
+  int _accentColorValue = defaultAccentColorValue;
+
+  /// 毛玻璃模糊总开关（false 时 Glass 退化为半透明圆角卡片）
+  bool _glassEnabled = true;
+
+  /// 毛玻璃模糊强度（0 = 无模糊）
+  double _blurSigma = 14;
   bool _loaded = false;
 
   SettingsState({
@@ -67,6 +98,19 @@ class SettingsState extends ChangeNotifier {
   bool get showHiddenFiles => _showHiddenFiles;
   AppLogLevel get logLevel => _logLevel;
   bool get loaded => _loaded;
+
+  /// 是否启用毛玻璃模糊
+  bool get glassEnabled => _glassEnabled;
+
+  /// 毛玻璃模糊强度（0~30）
+  double get blurSigma => _blurSigma;
+
+  /// 当前强调色（自定义主题）
+  Color get accentColor => Color(_accentColorValue);
+
+  /// 强调色浅色（用于高亮文本/图标）
+  Color get accentLightColor =>
+      Color.lerp(accentColor, Colors.white, 0.35) ?? accentColor;
 
   bool get aiConfigurationReady =>
       _apiKeyConfigured && _aiModelId.trim().isNotEmpty;
@@ -139,6 +183,18 @@ class SettingsState extends ChangeNotifier {
       _environment['COURIER_LOG_LEVEL'] ??
           preferences.getString('log_level') ??
           AppLogLevel.info.name,
+    );
+    // 读盘校验：仅接受色板内的值，否则回退默认（与 setAccentColor 对称）
+    final storedAccent = preferences.getInt('accent_color');
+    _accentColorValue =
+        accentPalette.any((item) => item.toARGB32() == storedAccent)
+        ? storedAccent!
+        : defaultAccentColorValue;
+    _glassEnabled = preferences.getBool('glass_enabled') ?? true;
+    _blurSigma = _boundedDouble(
+      preferences.getDouble('blur_sigma') ?? 14,
+      0.0,
+      30.0,
     );
     _apiKeyConfigured = await secureStorage.hasApiKey(_aiProviderId);
     _loaded = true;
@@ -416,6 +472,39 @@ class SettingsState extends ChangeNotifier {
       (preferences) => preferences.setString('log_level', value.name),
     );
     _logLevel = value;
+    notifyListeners();
+  }
+
+  /// 设置自定义主题强调色（需在 [accentPalette] 范围内）
+  Future<void> setAccentColor(Color color) async {
+    final value = color.toARGB32();
+    if (!accentPalette.any((item) => item.toARGB32() == value)) {
+      throw const CourierException('INVALID_SETTING', '不支持的主题色');
+    }
+    if (value == _accentColorValue) return;
+    await _persist((preferences) => preferences.setInt('accent_color', value));
+    _accentColorValue = value;
+    notifyListeners();
+  }
+
+  /// 设置毛玻璃模糊总开关
+  Future<void> setGlassEnabled(bool value) async {
+    if (value == _glassEnabled) return;
+    await _persist(
+      (preferences) => preferences.setBool('glass_enabled', value),
+    );
+    _glassEnabled = value;
+    notifyListeners();
+  }
+
+  /// 设置毛玻璃模糊强度（0~30）
+  Future<void> setBlurSigma(double value) async {
+    final clamped = _boundedDouble(value, 0.0, 30.0);
+    if (clamped == _blurSigma) return;
+    await _persist(
+      (preferences) => preferences.setDouble('blur_sigma', clamped),
+    );
+    _blurSigma = clamped;
     notifyListeners();
   }
 

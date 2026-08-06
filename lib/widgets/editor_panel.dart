@@ -123,7 +123,7 @@ class EditorPanel extends StatelessWidget {
                   icon: const Icon(Icons.add, size: 15),
                   label: const Text('新建文件', style: TextStyle(fontSize: 13)),
                   style: FilledButton.styleFrom(
-                    backgroundColor: kPrimary,
+                    backgroundColor: accentColorOf(context),
                     minimumSize: const Size(100, 32),
                   ),
                 ),
@@ -310,7 +310,7 @@ class _EditorTab extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
-              color: isActive ? kPrimary : Colors.transparent,
+              color: isActive ? accentColorOf(context) : Colors.transparent,
               width: 2,
             ),
           ),
@@ -660,7 +660,7 @@ class _ToolButton extends StatelessWidget {
             Icon(
               icon,
               size: 14,
-              color: enabled ? kPrimaryLight : Colors.white24,
+              color: enabled ? accentLightOf(context) : Colors.white24,
             ),
             const SizedBox(width: 4),
             Text(

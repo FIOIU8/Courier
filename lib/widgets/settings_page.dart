@@ -12,6 +12,7 @@ import '../services/courier_service.dart';
 import '../services/models.dart';
 import '../services/settings_state.dart';
 import '../services/workspace_service.dart';
+import 'animations.dart';
 import 'glass.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -29,12 +30,19 @@ class _SettingsPageState extends State<SettingsPage> {
     (label: '编辑器', icon: Icons.edit_note_outlined),
     (label: '任务', icon: Icons.queue_outlined),
     (label: '通用', icon: Icons.tune_outlined),
+    (label: '外观', icon: Icons.palette_outlined),
     (label: '关于', icon: Icons.info_outline),
   ];
 
   final TextEditingController _modelController = TextEditingController();
   final TextEditingController _apiKeyController = TextEditingController();
   int _activeSection = 0;
+
+  /// 区块切换滑动方向：1 = 新区块从右滑入；-1 = 从左滑入
+  int _sectionSlideDirection = 1;
+
+  /// 模糊强度拖动中的临时值（null = 未在拖动）
+  double? _dragBlurSigma;
   bool _initialized = false;
   bool _loadingModels = false;
   bool _savingCredential = false;
@@ -289,7 +297,7 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 960, maxHeight: 760),
+              constraints: const BoxConstraints(maxWidth: 840, maxHeight: 640),
               child: Glass(
                 radius: kRadiusLg,
                 color: kGlassBg,
@@ -338,7 +346,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 _sections[index].label,
                 style: const TextStyle(fontSize: 13),
               ),
-              onTap: () => setState(() => _activeSection = index),
+              onTap: () {
+                if (index == _activeSection) return;
+                setState(() {
+                  _sectionSlideDirection = index > _activeSection ? 1 : -1;
+                  _activeSection = index;
+                });
+              },
             ),
           ),
       ],
@@ -410,13 +424,20 @@ class _SettingsPageState extends State<SettingsPage> {
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-            child: switch (_activeSection) {
-              0 => _buildAISettings(),
-              1 => _buildEditorSettings(),
-              2 => _buildTaskSettings(),
-              3 => _buildGeneralSettings(),
-              _ => _buildAboutSettings(),
-            },
+            child: _VerticalSlideSwitcher(
+              direction: _sectionSlideDirection,
+              child: KeyedSubtree(
+                key: ValueKey(_activeSection),
+                child: switch (_activeSection) {
+                  0 => _buildAISettings(),
+                  1 => _buildEditorSettings(),
+                  2 => _buildTaskSettings(),
+                  3 => _buildGeneralSettings(),
+                  4 => _buildAppearanceSettings(),
+                  _ => _buildAboutSettings(),
+                },
+              ),
+            ),
           ),
         ),
       ],
@@ -604,14 +625,18 @@ class _SettingsPageState extends State<SettingsPage> {
         if (settings.currentProviderSupportsMillionContext)
           _settingRow(
             label: '上下文能力',
-            control: const Row(
+            control: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.all_inclusive, size: 17, color: kPrimaryLight),
-                SizedBox(width: 6),
+                Icon(
+                  Icons.all_inclusive,
+                  size: 17,
+                  color: accentLightOf(context),
+                ),
+                const SizedBox(width: 6),
                 Text(
                   '当前供应商支持百万上下文',
-                  style: TextStyle(fontSize: 12, color: kPrimaryLight),
+                  style: TextStyle(fontSize: 12, color: accentLightOf(context)),
                 ),
               ],
             ),
@@ -675,17 +700,17 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             if (providers[index].supportsMillionContext) ...[
                               const SizedBox(width: 10),
-                              const Icon(
+                              Icon(
                                 Icons.all_inclusive,
                                 size: 13,
-                                color: kPrimaryLight,
+                                color: accentLightOf(context),
                               ),
                               const SizedBox(width: 4),
-                              const Text(
+                              Text(
                                 '百万上下文',
                                 style: TextStyle(
                                   fontSize: 11,
-                                  color: kPrimaryLight,
+                                  color: accentLightOf(context),
                                 ),
                               ),
                             ],
@@ -833,6 +858,150 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Widget _buildAppearanceSettings() {
+    final settings = context.watch<SettingsState>();
+    final current = settings.accentColor;
+    final palette = SettingsState.accentPalette;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 8, bottom: 12),
+          child: Text(
+            '强调色',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+        ),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (var index = 0; index < palette.length; index++)
+              _accentSwatch(
+                color: palette[index],
+                name: SettingsState.accentPaletteNames[index],
+                selected: current.toARGB32() == palette[index].toARGB32(),
+                onTap: () => unawaited(
+                  _applySetting(() => settings.setAccentColor(palette[index])),
+                ),
+              ),
+          ],
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 18, bottom: 4),
+          child: Text(
+            '主题色将应用到全界面强调元素（按钮、选中态、图标等）',
+            style: TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _switchRow(
+          label: '毛玻璃模糊',
+          value: settings.glassEnabled,
+          onChanged: (value) =>
+              unawaited(_applySetting(() => settings.setGlassEnabled(value))),
+        ),
+        // 模糊强度：拖动过程仅改内存（本地预览），松手时一次性持久化，
+        // 避免每帧写入 SharedPreferences 并触发全树 BackdropFilter 重建。
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 150,
+                child: Text(
+                  '模糊强度',
+                  style: TextStyle(fontSize: 13, color: Colors.white70),
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  value: (_dragBlurSigma ?? settings.blurSigma).clamp(0, 30),
+                  min: 0,
+                  max: 30,
+                  divisions: 30,
+                  onChanged: (value) => setState(() => _dragBlurSigma = value),
+                  onChangeEnd: (value) {
+                    unawaited(
+                      _applySetting(() async {
+                        await settings.setBlurSigma(value);
+                        if (mounted) setState(() => _dragBlurSigma = null);
+                      }),
+                    );
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 80,
+                child: Text(
+                  '${(_dragBlurSigma ?? settings.blurSigma).round()}',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 12, color: accentLightOf(context)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _accentSwatch({
+    required Color color,
+    required String name,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final accentLight = accentLightOf(context);
+    return Tooltip(
+      message: name,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(kRadiusMd),
+        child: AnimatedContainer(
+          duration: kAnimDurationFast,
+          curve: kAnimCurveIn,
+          width: 56,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(kRadiusMd),
+            border: Border.all(
+              color: selected ? accentLight : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: selected
+                    ? const Icon(Icons.check, size: 14, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(height: 5),
+              Text(
+                name,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: selected ? accentLight : Colors.white54,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildAboutSettings() {
     final version = context.watch<CourierService>().version;
     return Column(
@@ -915,7 +1084,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Text(
                 display,
                 textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 12, color: kPrimaryLight),
+                style: TextStyle(fontSize: 12, color: accentLightOf(context)),
               ),
             ),
           ],
@@ -934,6 +1103,103 @@ class _SettingsPageState extends State<SettingsPage> {
         textAlign: TextAlign.right,
         style: const TextStyle(fontSize: 13, color: Colors.white54),
       ),
+    );
+  }
+}
+
+/// 同向垂直滑动切换：新区块与旧区块沿同一方向移动。
+/// direction = 1（向下切换）：新区块从下滑入、旧区块向上滑出（同向上移）；
+/// direction = -1（向上切换）：新区块从上滑入、旧区块向下滑出（同向下移）。
+/// 用 child 的 key 变化触发切换；旧区块直接透传保证 State 保留。
+class _VerticalSlideSwitcher extends StatefulWidget {
+  final Widget child;
+  final int direction;
+
+  const _VerticalSlideSwitcher({required this.child, required this.direction});
+
+  @override
+  State<_VerticalSlideSwitcher> createState() => _VerticalSlideSwitcherState();
+}
+
+class _VerticalSlideSwitcherState extends State<_VerticalSlideSwitcher>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _inAnimation;
+  late final Animation<double> _outAnimation;
+  Widget? _previousChild;
+  int _previousDirection = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: kAnimDurationMed)
+      // 初始为完成态：当前区块静止在原位（position = Offset.zero）
+      ..value = 1
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          // 仅移除旧区块，不复位 controller（复位会回到 begin 移出屏幕）
+          setState(() => _previousChild = null);
+        }
+      });
+    _inAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveIn);
+    // 新旧区块使用同一曲线：同时起步、同步加速、同时到位（避免旧区块延迟感）
+    _outAnimation = CurvedAnimation(parent: _controller, curve: kAnimCurveIn);
+  }
+
+  @override
+  void didUpdateWidget(_VerticalSlideSwitcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.child.key != oldWidget.child.key) {
+      _previousChild = oldWidget.child;
+      _previousDirection = widget.direction;
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shift = 0.15 * _previousDirection;
+    return Stack(
+      alignment: Alignment.topLeft,
+      children: [
+        if (_previousChild != null)
+          AnimatedBuilder(
+            animation: _outAnimation,
+            child: _previousChild!,
+            builder: (context, child) => FadeTransition(
+              // 旧区块滑出时渐隐（1→0），与新区块互补透明、避免文字重叠
+              opacity: Tween<double>(begin: 1, end: 0).animate(_outAnimation),
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: Offset.zero,
+                  end: Offset(0, -shift),
+                ).animate(_outAnimation),
+                child: child,
+              ),
+            ),
+          ),
+        AnimatedBuilder(
+          animation: _inAnimation,
+          child: widget.child,
+          builder: (context, child) => FadeTransition(
+            // 新区块滑入时渐显（0→1）
+            opacity: Tween<double>(begin: 0, end: 1).animate(_inAnimation),
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: Offset(0, shift),
+                end: Offset.zero,
+              ).animate(_inAnimation),
+              child: child,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

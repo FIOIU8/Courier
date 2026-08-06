@@ -137,7 +137,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.folder_open, size: 17, color: kPrimary),
+          Icon(Icons.folder_open, size: 17, color: accentColorOf(context)),
           const SizedBox(width: 6),
           Expanded(
             child: Column(
@@ -163,7 +163,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           ),
           IconButton(
             icon: const Icon(Icons.filter_list, size: 17),
-            color: _showFilterPanel ? kPrimary : Colors.white54,
+            color: _showFilterPanel ? accentColorOf(context) : Colors.white54,
             tooltip: '文件过滤',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
@@ -176,7 +176,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           ),
           IconButton(
             icon: const Icon(Icons.block, size: 17),
-            color: _showExcludePanel ? kPrimary : Colors.white54,
+            color: _showExcludePanel ? accentColorOf(context) : Colors.white54,
             tooltip: '排除列表',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
@@ -216,17 +216,20 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       return _buildEmpty(context, ws);
     }
     if (ws.scanning) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
               width: 20,
               height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: kPrimary),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: accentColorOf(context),
+              ),
             ),
-            SizedBox(height: 8),
-            Text(
+            const SizedBox(height: 8),
+            const Text(
               '扫描文件中...',
               style: TextStyle(fontSize: 13, color: Colors.white38),
             ),
@@ -292,7 +295,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
               icon: const Icon(Icons.folder_open, size: 15),
               label: const Text('打开工作区', style: TextStyle(fontSize: 13)),
               style: FilledButton.styleFrom(
-                backgroundColor: kPrimary,
+                backgroundColor: accentColorOf(context),
                 minimumSize: const Size(120, 32),
               ),
             ),
@@ -319,7 +322,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               children: [
-                const Icon(Icons.block, size: 13, color: kPrimary),
+                Icon(Icons.block, size: 13, color: accentColorOf(context)),
                 const SizedBox(width: 4),
                 const Text(
                   '排除列表',
@@ -359,7 +362,9 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                       Icon(
                         isDefault ? Icons.lock : Icons.circle,
                         size: isDefault ? 10 : 6,
-                        color: isDefault ? Colors.white24 : kPrimary,
+                        color: isDefault
+                            ? Colors.white24
+                            : accentColorOf(context),
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -411,15 +416,18 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                       color: Colors.white70,
                       fontFamily: 'Consolas',
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       isDense: true,
                       hintText: '排除模式',
-                      hintStyle: TextStyle(fontSize: 12, color: Colors.white24),
-                      enabledBorder: UnderlineInputBorder(
+                      hintStyle: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white24,
+                      ),
+                      enabledBorder: const UnderlineInputBorder(
                         borderSide: BorderSide(color: Color(0xFF1E2438)),
                       ),
                       focusedBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: kPrimary),
+                        borderSide: BorderSide(color: accentColorOf(context)),
                       ),
                     ),
                     onSubmitted: (_) =>
@@ -428,7 +436,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.add, size: 15),
-                  color: kPrimary,
+                  color: accentColorOf(context),
                   constraints: const BoxConstraints(
                     minWidth: 24,
                     minHeight: 24,
@@ -451,7 +459,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
 
   Widget _buildFilterPanel(BuildContext context, WorkspaceService ws) {
     final categories = [
-      ('md', 'Markdown', kPrimary, Icons.description),
+      ('md', 'Markdown', accentColorOf(context), Icons.description),
       ('code', '代码', const Color(0xFF10B981), Icons.code),
       ('json', '配置', const Color(0xFFF59E0B), Icons.settings),
       ('image', '图片', const Color(0xFFEC4899), Icons.image),
@@ -471,7 +479,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
         children: [
           Row(
             children: [
-              const Icon(Icons.filter_list, size: 13, color: kPrimary),
+              Icon(Icons.filter_list, size: 13, color: accentColorOf(context)),
               const SizedBox(width: 4),
               const Text(
                 '文件过滤',
@@ -488,11 +496,14 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                     '更新文件过滤失败',
                   ),
                 ),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Text(
                     '全选',
-                    style: TextStyle(fontSize: 12, color: kPrimary),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: accentColorOf(context),
+                    ),
                   ),
                 ),
               ),
@@ -531,14 +542,18 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                   Icon(
                     ws.showHidden ? Icons.visibility : Icons.visibility_off,
                     size: 13,
-                    color: ws.showHidden ? kPrimary : Colors.white38,
+                    color: ws.showHidden
+                        ? accentColorOf(context)
+                        : Colors.white38,
                   ),
                   const SizedBox(width: 4),
                   Text(
                     ws.showHidden ? '显示隐藏文件' : '隐藏点文件',
                     style: TextStyle(
                       fontSize: 12,
-                      color: ws.showHidden ? kPrimary : Colors.white38,
+                      color: ws.showHidden
+                          ? accentColorOf(context)
+                          : Colors.white38,
                     ),
                   ),
                 ],
@@ -918,8 +933,8 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
                 enabledBorder: const UnderlineInputBorder(
                   borderSide: BorderSide(color: Color(0xFF1E2438)),
                 ),
-                focusedBorder: const UnderlineInputBorder(
-                  borderSide: BorderSide(color: kPrimary),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: accentColorOf(ctx)),
                 ),
               ),
               onChanged: (value) => name = value,
@@ -937,7 +952,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: kPrimary),
+            style: FilledButton.styleFrom(backgroundColor: accentColorOf(ctx)),
             child: const Text('创建', style: TextStyle(fontSize: 13)),
           ),
         ],
@@ -985,12 +1000,12 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           autofocus: true,
           controller: TextEditingController(text: node.name),
           style: const TextStyle(fontSize: 14, color: Colors.white),
-          decoration: const InputDecoration(
-            enabledBorder: UnderlineInputBorder(
+          decoration: InputDecoration(
+            enabledBorder: const UnderlineInputBorder(
               borderSide: BorderSide(color: Color(0xFF1E2438)),
             ),
             focusedBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: kPrimary),
+              borderSide: BorderSide(color: accentColorOf(ctx)),
             ),
           ),
           onChanged: (value) => name = value,
@@ -1006,7 +1021,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: kPrimary),
+            style: FilledButton.styleFrom(backgroundColor: accentColorOf(ctx)),
             child: const Text('重命名', style: TextStyle(fontSize: 13)),
           ),
         ],
@@ -1253,7 +1268,7 @@ class _FileTreeTileState extends State<_FileTreeTile> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: kPrimary,
+            color: accentColorOf(context),
             borderRadius: BorderRadius.circular(kRadiusSm),
           ),
           child: Row(
@@ -1346,8 +1361,10 @@ class _TileRowState extends State<_TileRow> {
                 widget.isDir ? Icons.folder : Icons.description,
                 size: 16,
                 color: widget.isDir
-                    ? kPrimaryLight
-                    : (widget.isActive ? kPrimaryLight : Colors.white38),
+                    ? accentLightOf(context)
+                    : (widget.isActive
+                          ? accentLightOf(context)
+                          : Colors.white38),
               ),
               const SizedBox(width: 6),
               Expanded(
@@ -1356,8 +1373,10 @@ class _TileRowState extends State<_TileRow> {
                   style: TextStyle(
                     fontSize: 13,
                     color: widget.isDragging
-                        ? kPrimary
-                        : (widget.isActive ? kPrimaryLight : Colors.white70),
+                        ? accentColorOf(context)
+                        : (widget.isActive
+                              ? accentLightOf(context)
+                              : Colors.white70),
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),

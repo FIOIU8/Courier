@@ -1098,7 +1098,130 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        // ---- 面板与栏透明度 ----
+        const Padding(
+          padding: EdgeInsets.only(top: 18, bottom: 4),
+          child: Text(
+            '面板与栏透明度',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: Text(
+            '调低可让背景图片透出，100% 保持原样',
+            style: TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+        ),
+        _buildSurfaceOpacitySlider(
+          label: '左侧面板',
+          sliderKey: const ValueKey('left-panel-opacity-slider'),
+          value: settings.leftPanelOpacity,
+          onChanged: (value) => unawaited(
+            _applySetting(
+              () => settings.setLeftPanelOpacity(value, persist: false),
+            ),
+          ),
+          onChangeEnd: (value) => unawaited(
+            _applySetting(() => settings.setLeftPanelOpacity(value)),
+          ),
+        ),
+        _buildSurfaceOpacitySlider(
+          label: '中间面板',
+          sliderKey: const ValueKey('middle-panel-opacity-slider'),
+          value: settings.middlePanelOpacity,
+          onChanged: (value) => unawaited(
+            _applySetting(
+              () => settings.setMiddlePanelOpacity(value, persist: false),
+            ),
+          ),
+          onChangeEnd: (value) => unawaited(
+            _applySetting(() => settings.setMiddlePanelOpacity(value)),
+          ),
+        ),
+        _buildSurfaceOpacitySlider(
+          label: '右侧面板',
+          sliderKey: const ValueKey('right-panel-opacity-slider'),
+          value: settings.rightPanelOpacity,
+          onChanged: (value) => unawaited(
+            _applySetting(
+              () => settings.setRightPanelOpacity(value, persist: false),
+            ),
+          ),
+          onChangeEnd: (value) => unawaited(
+            _applySetting(() => settings.setRightPanelOpacity(value)),
+          ),
+        ),
+        _buildSurfaceOpacitySlider(
+          label: '标题栏',
+          sliderKey: const ValueKey('title-bar-opacity-slider'),
+          value: settings.titleBarOpacity,
+          onChanged: (value) => unawaited(
+            _applySetting(
+              () => settings.setTitleBarOpacity(value, persist: false),
+            ),
+          ),
+          onChangeEnd: (value) => unawaited(
+            _applySetting(() => settings.setTitleBarOpacity(value)),
+          ),
+        ),
+        _buildSurfaceOpacitySlider(
+          label: '状态栏',
+          sliderKey: const ValueKey('status-bar-opacity-slider'),
+          value: settings.statusBarOpacity,
+          onChanged: (value) => unawaited(
+            _applySetting(
+              () => settings.setStatusBarOpacity(value, persist: false),
+            ),
+          ),
+          onChangeEnd: (value) => unawaited(
+            _applySetting(() => settings.setStatusBarOpacity(value)),
+          ),
+        ),
       ],
+    );
+  }
+
+  /// 面板/栏透明度滑杆：拖动实时更新内存（persist: false），松手持久化。
+  Widget _buildSurfaceOpacitySlider({
+    required String label,
+    required Key sliderKey,
+    required double value,
+    required ValueChanged<double> onChanged,
+    required ValueChanged<double> onChangeEnd,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 150,
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+          ),
+          Expanded(
+            child: Slider(
+              key: sliderKey,
+              value: value.clamp(0.0, 1.0),
+              max: 1,
+              divisions: 20,
+              onChanged: onChanged,
+              onChangeEnd: onChangeEnd,
+            ),
+          ),
+          SizedBox(
+            width: 80,
+            child: Text(
+              '${(value * 100).round()}%',
+              textAlign: TextAlign.right,
+              style: TextStyle(fontSize: 12, color: accentLightOf(context)),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

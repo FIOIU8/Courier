@@ -594,6 +594,8 @@ class _MainPageState extends State<MainPage> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
+    // 面板/标题栏/状态栏透明度随设置联动（实时）
+    final settings = context.watch<SettingsState>();
     return Scaffold(
       body: Stack(
         children: [
@@ -606,7 +608,10 @@ class _MainPageState extends State<MainPage> with WindowListener {
                 key: const ValueKey('window-title-bar'),
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: glassHeaderBgOf(context),
+                  color: applyOpacity(
+                    glassHeaderBgOf(context),
+                    settings.titleBarOpacity,
+                  ),
                   border: Border(
                     bottom: BorderSide(color: glassBorderOf(context)),
                   ),
@@ -620,18 +625,27 @@ class _MainPageState extends State<MainPage> with WindowListener {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       // ---- 左栏：文件树 ----
-                      const SizedBox(
+                      SizedBox(
                         width: 250,
-                        child: Glass(child: FileTreePanel()),
+                        child: Glass(
+                          opacity: settings.leftPanelOpacity,
+                          child: FileTreePanel(),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       // ---- 中栏：编辑器 ----
-                      const Expanded(child: Glass(child: EditorPanel())),
+                      Expanded(
+                        child: Glass(
+                          opacity: settings.middlePanelOpacity,
+                          child: EditorPanel(),
+                        ),
+                      ),
                       const SizedBox(width: 12),
                       // ---- 右栏：AI 助手 + 任务队列 ----
                       SizedBox(
                         width: 320,
                         child: Glass(
+                          opacity: settings.rightPanelOpacity,
                           child: RightPanel(onOpenSettings: _openSettings),
                         ),
                       ),
@@ -642,8 +656,13 @@ class _MainPageState extends State<MainPage> with WindowListener {
               DecoratedBox(
                 key: const ValueKey('window-status-bar'),
                 decoration: BoxDecoration(
-                  color: glassHeaderBgOf(context),
-                  border: Border(top: BorderSide(color: glassBorderOf(context))),
+                  color: applyOpacity(
+                    glassHeaderBgOf(context),
+                    settings.statusBarOpacity,
+                  ),
+                  border: Border(
+                    top: BorderSide(color: glassBorderOf(context)),
+                  ),
                 ),
                 child: const SizedBox(width: double.infinity, child: _StatusBar()),
               ),

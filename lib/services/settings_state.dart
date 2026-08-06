@@ -104,6 +104,13 @@ class SettingsState extends ChangeNotifier {
 
   /// 最近使用过的背景图片路径（最新在前，上限 [maxBackgroundImageHistory]）
   List<String> _backgroundImageHistory = const [];
+
+  /// 左/中/右面板与标题栏/状态栏透明度（0.0–1.0，1.0 = 保持原样）
+  double _leftPanelOpacity = 1.0;
+  double _middlePanelOpacity = 1.0;
+  double _rightPanelOpacity = 1.0;
+  double _titleBarOpacity = 1.0;
+  double _statusBarOpacity = 1.0;
   bool _loaded = false;
 
   SettingsState({
@@ -166,6 +173,21 @@ class SettingsState extends ChangeNotifier {
   /// 最近使用过的背景图片路径（不可变视图，最新在前）
   List<String> get backgroundImageHistory =>
       List<String>.unmodifiable(_backgroundImageHistory);
+
+  /// 左侧面板透明度（0.0–1.0）
+  double get leftPanelOpacity => _leftPanelOpacity;
+
+  /// 中间面板透明度（0.0–1.0）
+  double get middlePanelOpacity => _middlePanelOpacity;
+
+  /// 右侧面板透明度（0.0–1.0）
+  double get rightPanelOpacity => _rightPanelOpacity;
+
+  /// 标题栏透明度（0.0–1.0）
+  double get titleBarOpacity => _titleBarOpacity;
+
+  /// 状态栏透明度（0.0–1.0）
+  double get statusBarOpacity => _statusBarOpacity;
 
   /// 当前强调色（自定义主题）
   Color get accentColor => Color(_accentColorValue);
@@ -295,6 +317,31 @@ class SettingsState extends ChangeNotifier {
     _uiStyle = _parseUiStyle(preferences.getString('theme_ui_style'));
     _backgroundImageHistory = _readBackgroundImageHistory(
       preferences.getString('theme_background_image_history'),
+    );
+    _leftPanelOpacity = _boundedDouble(
+      preferences.getDouble('panel_opacity_left') ?? 1.0,
+      0.0,
+      1.0,
+    );
+    _middlePanelOpacity = _boundedDouble(
+      preferences.getDouble('panel_opacity_middle') ?? 1.0,
+      0.0,
+      1.0,
+    );
+    _rightPanelOpacity = _boundedDouble(
+      preferences.getDouble('panel_opacity_right') ?? 1.0,
+      0.0,
+      1.0,
+    );
+    _titleBarOpacity = _boundedDouble(
+      preferences.getDouble('title_bar_opacity') ?? 1.0,
+      0.0,
+      1.0,
+    );
+    _statusBarOpacity = _boundedDouble(
+      preferences.getDouble('status_bar_opacity') ?? 1.0,
+      0.0,
+      1.0,
     );
     _apiKeyConfigured = await secureStorage.hasApiKey(_aiProviderId);
     _loaded = true;
@@ -791,6 +838,84 @@ class SettingsState extends ChangeNotifier {
     }
     if (value == _backgroundOpacity) return;
     _backgroundOpacity = value;
+    notifyListeners();
+  }
+
+  /// 设置左侧面板透明度（0.0–1.0）。
+  /// [persist] 为 false 时仅更新内存并通知（实时渲染），不写盘。
+  Future<void> setLeftPanelOpacity(double value, {bool persist = true}) =>
+      _setSurfaceOpacity(
+        key: 'panel_opacity_left',
+        current: _leftPanelOpacity,
+        value: value,
+        persist: persist,
+        apply: (next) => _leftPanelOpacity = next,
+      );
+
+  /// 设置中间面板透明度（0.0–1.0）。
+  Future<void> setMiddlePanelOpacity(double value, {bool persist = true}) =>
+      _setSurfaceOpacity(
+        key: 'panel_opacity_middle',
+        current: _middlePanelOpacity,
+        value: value,
+        persist: persist,
+        apply: (next) => _middlePanelOpacity = next,
+      );
+
+  /// 设置右侧面板透明度（0.0–1.0）。
+  Future<void> setRightPanelOpacity(double value, {bool persist = true}) =>
+      _setSurfaceOpacity(
+        key: 'panel_opacity_right',
+        current: _rightPanelOpacity,
+        value: value,
+        persist: persist,
+        apply: (next) => _rightPanelOpacity = next,
+      );
+
+  /// 设置标题栏透明度（0.0–1.0）。
+  Future<void> setTitleBarOpacity(double value, {bool persist = true}) =>
+      _setSurfaceOpacity(
+        key: 'title_bar_opacity',
+        current: _titleBarOpacity,
+        value: value,
+        persist: persist,
+        apply: (next) => _titleBarOpacity = next,
+      );
+
+  /// 设置状态栏透明度（0.0–1.0）。
+  Future<void> setStatusBarOpacity(double value, {bool persist = true}) =>
+      _setSurfaceOpacity(
+        key: 'status_bar_opacity',
+        current: _statusBarOpacity,
+        value: value,
+        persist: persist,
+        apply: (next) => _statusBarOpacity = next,
+      );
+
+  /// 通用表面透明度设置器：
+  /// [persist] 为 true 时始终写盘（拖动实时更新内存后，松手回调的值与内存
+  /// 相同，必须照常持久化），值未变时不再重复通知；
+  /// [persist] 为 false 时仅更新内存并通知。
+  Future<void> _setSurfaceOpacity({
+    required String key,
+    required double current,
+    required double value,
+    required bool persist,
+    required void Function(double) apply,
+  }) async {
+    if (!value.isFinite || value < 0.0 || value > 1.0) {
+      throw const CourierException('INVALID_SETTING', '透明度必须位于 0.0 到 1.0');
+    }
+    if (persist) {
+      await _persist((preferences) => preferences.setDouble(key, value));
+      if (value != current) {
+        apply(value);
+        notifyListeners();
+      }
+      return;
+    }
+    if (value == current) return;
+    apply(value);
     notifyListeners();
   }
 

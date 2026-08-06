@@ -92,6 +92,49 @@ void main() {
     );
   });
 
+  testWidgets('Glass 支持透明度缩放底色', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    addTearDown(settings.dispose);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Glass(
+                opacity: 0.5,
+                padding: EdgeInsets.all(16),
+                child: Text('半透明面板'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // 默认 M3 面板底色 kGlassBg alpha ≈ 0.8，透明度系数 0.5 → alpha ≈ 0.4
+    final containers = tester.widgetList<Container>(find.byType(Container));
+    expect(
+      containers.any((c) {
+        final decoration = c.decoration;
+        return decoration is BoxDecoration &&
+            decoration.color != null &&
+            (decoration.color!.a - 0.4).abs() < 0.001;
+      }),
+      isTrue,
+      reason: 'Glass 透明度应缩放底色 alpha 至约 0.4',
+    );
+  });
+
   testWidgets('HoverCard 组件可渲染内容', (WidgetTester tester) async {
     await tester.pumpWidget(
       const MaterialApp(

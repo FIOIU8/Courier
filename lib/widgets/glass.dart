@@ -108,6 +108,11 @@ Color glassInputUnderlineOf(BuildContext context) =>
     ? VscodePalette.border
     : const Color(0xFF1E2438);
 
+/// 按系数 [opacity]（0.0–1.0）缩放颜色透明度，
+/// 用于面板/标题栏/状态栏透明度调节（1.0 = 保持原样）。
+Color applyOpacity(Color color, double opacity) =>
+    color.withValues(alpha: color.a * opacity);
+
 /// 统一对话框圆角与边框样式（随 UI 样式联动）。
 ShapeBorder kDialogShapeOf(BuildContext context) => RoundedRectangleBorder(
   borderRadius: BorderRadius.circular(kRadiusLg),
@@ -122,12 +127,14 @@ ShapeBorder kDialogShapeOf(BuildContext context) => RoundedRectangleBorder(
 /// [kEnableGlass] 为 false 时自动退化为纯半透明圆角卡片。
 /// [color]/[boxShadow]/[border] 未指定时按当前 UI 样式取默认
 /// （VSCode 风格为扁平面板色、无阴影）。
+/// [opacity] 对底色做透明度缩放（0.0–1.0），用于让背景图片透出。
 class Glass extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double radius;
   final Color? color;
+  final double? opacity;
   final List<BoxShadow>? boxShadow;
   final Border? border;
   final Clip clipBehavior;
@@ -139,6 +146,7 @@ class Glass extends StatelessWidget {
     this.margin,
     this.radius = kRadiusLg,
     this.color,
+    this.opacity,
     this.boxShadow,
     this.border,
     this.clipBehavior = Clip.antiAlias,
@@ -148,10 +156,14 @@ class Glass extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsState>();
     final isVscode = settings.uiStyle == AppUiStyle.vscode;
+    final baseColor = color ?? (isVscode ? VscodePalette.panel : kGlassBg);
+    final resolvedColor = opacity == null
+        ? baseColor
+        : applyOpacity(baseColor, opacity!);
     Widget inner = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: color ?? (isVscode ? VscodePalette.panel : kGlassBg),
+        color: resolvedColor,
         borderRadius: BorderRadius.circular(radius),
         border:
             border ??

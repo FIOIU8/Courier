@@ -777,4 +777,74 @@ void main() {
     await settings.load();
     expect(settings.backgroundImageHistory, ['valid.png']);
   });
+
+  test('面板/栏透明度：持久化往返、越界钳制与实时更新', () async {
+    SharedPreferences.setMockInitialValues({
+      'panel_opacity_left': 0.4,
+      'panel_opacity_middle': 0.6,
+      'panel_opacity_right': 0.8,
+      'title_bar_opacity': 0.3,
+      'status_bar_opacity': 0.7,
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.leftPanelOpacity, 0.4);
+    expect(settings.middlePanelOpacity, 0.6);
+    expect(settings.rightPanelOpacity, 0.8);
+    expect(settings.titleBarOpacity, 0.3);
+    expect(settings.statusBarOpacity, 0.7);
+
+    // 越界钳制
+    SharedPreferences.setMockInitialValues({
+      'panel_opacity_left': 5.0,
+      'status_bar_opacity': -1.0,
+    });
+    final clamped = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(clamped.dispose);
+    await clamped.load();
+    expect(clamped.leftPanelOpacity, 1.0);
+    expect(clamped.statusBarOpacity, 0.0);
+
+    // persist:false 实时更新内存但不写盘
+    var prefs = await SharedPreferences.getInstance();
+    await clamped.setLeftPanelOpacity(0.2, persist: false);
+    expect(clamped.leftPanelOpacity, 0.2);
+    expect(
+      prefs.getDouble('panel_opacity_left'),
+      5.0,
+      reason: '拖动过程不应写盘',
+    );
+
+    // 松手持久化（即使值与内存相同也写盘）
+    await clamped.setLeftPanelOpacity(0.2);
+    prefs = await SharedPreferences.getInstance();
+    expect(prefs.getDouble('panel_opacity_left'), 0.2);
+
+    // setter 拒绝越界
+    await expectLater(
+      clamped.setTitleBarOpacity(1.5),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+
+    // 默认值均为 1.0（保持原样）
+    SharedPreferences.setMockInitialValues({});
+    final defaults = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(defaults.dispose);
+    await defaults.load();
+    expect(defaults.leftPanelOpacity, 1.0);
+    expect(defaults.middlePanelOpacity, 1.0);
+    expect(defaults.rightPanelOpacity, 1.0);
+    expect(defaults.titleBarOpacity, 1.0);
+    expect(defaults.statusBarOpacity, 1.0);
+  });
 }

@@ -366,6 +366,101 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('外观区块：面板与栏透明度滑杆实时渲染并持久化', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('外观').first);
+    await tester.pumpAndSettle();
+
+    // 五个透明度滑杆均渲染
+    for (final key in const [
+      'left-panel-opacity-slider',
+      'middle-panel-opacity-slider',
+      'right-panel-opacity-slider',
+      'title-bar-opacity-slider',
+      'status-bar-opacity-slider',
+    ]) {
+      expect(find.byKey(ValueKey(key)), findsOneWidget, reason: '$key 应渲染');
+    }
+
+    // 滚动到"左侧面板"滑杆并拖动：拖动中内存值实时更新且未写盘
+    final sliderFinder = find.byKey(
+      const ValueKey('left-panel-opacity-slider'),
+    );
+    await tester.ensureVisible(sliderFinder);
+    await tester.pumpAndSettle();
+
+    final before = settings.leftPanelOpacity;
+    final gesture = await tester.startGesture(tester.getCenter(sliderFinder));
+    await gesture.moveBy(const Offset(-60, 0));
+    await tester.pump();
+    expect(
+      settings.leftPanelOpacity,
+      isNot(before),
+      reason: '拖动过程应实时更新面板透明度',
+    );
+    var prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getDouble('panel_opacity_left'),
+      isNot(settings.leftPanelOpacity),
+      reason: '拖动过程不应写盘',
+    );
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getDouble('panel_opacity_left'),
+      settings.leftPanelOpacity,
+      reason: '松手应持久化',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('自定义供应商表单可新增并经二次确认删除', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final secureStorage = SecureStorageService(store: _MemoryCredentialStore());

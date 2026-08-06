@@ -105,7 +105,7 @@ UI 不直接访问平台动态库，也不持有外部服务句柄。
 
 全局非敏感设置统一通过 <code>SettingsState</code> 访问：
 
-- AI Provider、模型、温度和输出上限。
+- AI Provider、模型、请求方式、系统提示词、温度和输出上限。
 - 编辑器字号与自动保存。
 - 任务并发和启动行为。
 - 工作区恢复、隐藏文件和日志级别。
@@ -118,7 +118,8 @@ AI API Key 由 <code>SecureStorageService</code> 写入操作系统凭据存储�
 
 <code>AIService</code> 支持 OpenAI 和 Anthropic 官方接口：
 
-- Provider 和模型配置校验。
+- Provider、模型和请求方式（Responses API / Chat Completions / Anthropic API）配置校验。
+- 自定义系统提示词前置为 system 消息。
 - 模型列表读取。
 - SSE 流式响应。
 - 连接超时、响应超时、有限重试和退避。

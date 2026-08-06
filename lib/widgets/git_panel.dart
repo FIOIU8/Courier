@@ -28,6 +28,12 @@ class _GitPanelState extends State<GitPanel> {
   bool _stagedDiff = false;
   bool _refreshing = false;
   bool _loadingCommitDetail = false;
+
+  /// 提交详情是否展开（默认隐藏，右键点击提交弹出）
+  bool _detailExpanded = false;
+
+  /// 提交详情面板高度（可拖动调整占用空间）
+  double _detailHeight = 200;
   String? _error;
 
   @override
@@ -124,7 +130,9 @@ class _GitPanelState extends State<GitPanel> {
     }
   }
 
+  /// 左键点击提交：选中并展开提交详情
   Future<void> _loadCommitDetail(GitCommitEntry entry) async {
+    setState(() => _detailExpanded = true);
     final service = context.read<CourierService>();
     setState(() {
       _selectedCommitHash = entry.fullHash;
@@ -212,6 +220,7 @@ class _GitPanelState extends State<GitPanel> {
           _selectedCommitHash = null;
           _commitDetail = null;
           _loadingCommitDetail = false;
+          _detailExpanded = false;
         });
       }
       await _refresh();
@@ -264,6 +273,7 @@ class _GitPanelState extends State<GitPanel> {
         _buildToolbar(branches),
         _buildViewSelector(),
         if (_error != null) _buildErrorBar(),
+        // 变更/历史视图直接切换（无过渡动画）
         Expanded(
           child: _view == _GitPanelView.changes
               ? _buildChangesView(files, diff)
@@ -387,14 +397,57 @@ class _GitPanelState extends State<GitPanel> {
                 ),
         ),
         const Divider(height: 1, color: kGlassBorder),
-        _buildCommitDetailHeader(),
-        Expanded(child: _buildCommitDetail()),
+        // 提交详情默认隐藏；右键点击提交弹出，可拖动上边缘调整占用高度
+        if (_detailExpanded && _selectedCommitHash != null)
+          SizedBox(
+            height: _detailHeight,
+            child: Column(
+              children: [
+                _buildDetailDragHandle(),
+                _buildCommitDetailHeader(),
+                Expanded(child: _buildCommitDetail()),
+              ],
+            ),
+          ),
       ],
+    );
+  }
+
+  /// 详情面板上边缘的拖拽手柄：上下拖动调整详情占用高度
+  Widget _buildDetailDragHandle() {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeUpDown,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragUpdate: (details) {
+          setState(() {
+            _detailHeight = (_detailHeight - details.delta.dy).clamp(
+              120.0,
+              340.0,
+            );
+          });
+        },
+        child: SizedBox(
+          height: 10,
+          child: Center(
+            child: Container(
+              width: 36,
+              height: 3,
+              decoration: BoxDecoration(
+                color: kGlassChipBg,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
   Widget _buildCommitRow(GitCommitEntry entry) {
     final selected = entry.fullHash == _selectedCommitHash;
+    final accent = accentColorOf(context);
+    final accentLight = accentLightOf(context);
     return Material(
       key: ValueKey('git-commit-${entry.fullHash}'),
       color: selected ? kGlassSelectedBg : Colors.transparent,
@@ -416,10 +469,10 @@ class _GitPanelState extends State<GitPanel> {
                         entry.shortHash,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontFamily: 'Consolas',
-                          color: kPrimaryLight,
+                          color: accentLight,
                         ),
                       ),
                       if (entry.isHead) ...[
@@ -430,15 +483,15 @@ class _GitPanelState extends State<GitPanel> {
                             vertical: 1,
                           ),
                           decoration: BoxDecoration(
-                            color: kPrimary.withValues(alpha: 0.18),
+                            color: accent.withValues(alpha: 0.18),
                             borderRadius: BorderRadius.circular(3),
                           ),
-                          child: const Text(
+                          child: Text(
                             'HEAD',
                             style: TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.w600,
-                              color: kPrimaryLight,
+                              color: accentLight,
                             ),
                           ),
                         ),
@@ -510,12 +563,13 @@ class _GitPanelState extends State<GitPanel> {
   }
 
   Widget _buildCommitDetailHeader() {
+    final accent = accentColorOf(context);
     return SizedBox(
       height: 38,
       child: Row(
         children: [
           const SizedBox(width: 10),
-          const Icon(Icons.article_outlined, size: 15, color: kPrimary),
+          Icon(Icons.article_outlined, size: 15, color: accent),
           const SizedBox(width: 6),
           const Text(
             '提交详情',
@@ -528,7 +582,14 @@ class _GitPanelState extends State<GitPanel> {
               height: 14,
               child: CircularProgressIndicator(strokeWidth: 1.5),
             ),
-          const SizedBox(width: 10),
+          IconButton(
+            tooltip: '收起详情',
+            onPressed: () => setState(() => _detailExpanded = false),
+            icon: const Icon(Icons.close, size: 14),
+            constraints: const BoxConstraints.tightFor(width: 26, height: 26),
+            padding: EdgeInsets.zero,
+          ),
+          const SizedBox(width: 6),
         ],
       ),
     );
@@ -590,7 +651,7 @@ class _GitPanelState extends State<GitPanel> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.account_tree, size: 15, color: kPrimary),
+          Icon(Icons.account_tree, size: 15, color: accentColorOf(context)),
           const SizedBox(width: 6),
           Expanded(
             child: DropdownButtonHideUnderline(
@@ -708,7 +769,7 @@ class _GitPanelState extends State<GitPanel> {
                 width: 24,
                 child: Text(
                   file.status,
-                  style: const TextStyle(fontSize: 11, color: kPrimaryLight),
+                  style: TextStyle(fontSize: 11, color: accentLightOf(context)),
                 ),
               ),
               Expanded(

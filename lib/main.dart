@@ -752,6 +752,14 @@ class _BackgroundState extends State<_Background> {
   Widget build(BuildContext context) {
     return Consumer<SettingsState>(
       builder: (context, settings, _) {
+        // 启动时图片缺失回退后，用户重新设置了背景图片：
+        // 恢复图片渲染并重新校验新路径。
+        if (_imageMissing && settings.backgroundImagePath.isNotEmpty) {
+          _imageMissing = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            unawaited(_verifyBackgroundImage());
+          });
+        }
         final isVscode = settings.uiStyle == AppUiStyle.vscode;
         final solidColor = isVscode
             ? VscodePalette.background

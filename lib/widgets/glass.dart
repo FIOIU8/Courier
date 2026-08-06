@@ -77,14 +77,8 @@ Color accentColorOf(BuildContext context) =>
 Color accentLightOf(BuildContext context) =>
     context.watch<SettingsState>().accentLightColor;
 
-/// 当前 UI 样式下的面板底色（VSCode 风格为扁平面板色）。
+/// 当前 UI 样式下的头部/状态栏底色（VSCode 风格为扁平面板色）。
 /// 调用方需位于 Provider 树内且处于 build 上下文。
-Color glassBgOf(BuildContext context) =>
-    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
-    ? VscodePalette.panel
-    : kGlassBg;
-
-/// 当前 UI 样式下的头部/状态栏底色。
 Color glassHeaderBgOf(BuildContext context) =>
     context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
     ? VscodePalette.panel
@@ -95,12 +89,6 @@ Color glassBorderOf(BuildContext context) =>
     context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
     ? VscodePalette.border
     : kGlassBorder;
-
-/// 当前 UI 样式下的面板悬浮阴影（VSCode 扁平风格无阴影）。
-List<BoxShadow> glassShadowOf(BuildContext context) =>
-    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
-    ? const []
-    : kShadowMd;
 
 /// 统一对话框圆角与边框样式
 ShapeBorder get kDialogShape => RoundedRectangleBorder(

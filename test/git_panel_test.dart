@@ -132,7 +132,8 @@ void main() {
     expect(find.byKey(const Key('git-history-view')), findsOneWidget);
     expect(find.text('chore: initialize widget repository'), findsOneWidget);
     expect(find.text('HEAD'), findsOneWidget);
-    expect(find.text('未选择提交'), findsOneWidget);
+    // 提交详情默认隐藏
+    expect(find.text('未选择提交'), findsNothing);
 
     final commitRow = tester.widget<InkWell>(
       find
@@ -142,6 +143,7 @@ void main() {
           )
           .first,
     );
+    // 左键点击提交：选中并展开提交详情
     await tester.runAsync(() async {
       commitRow.onTap!();
       await waitForCondition(() => !courier.git.loading);
@@ -242,7 +244,8 @@ void main() {
     await tester.pump();
 
     expect(find.text('仓库暂无提交记录'), findsOneWidget);
-    expect(find.text('未选择提交'), findsOneWidget);
+    // 提交详情默认隐藏
+    expect(find.text('未选择提交'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();

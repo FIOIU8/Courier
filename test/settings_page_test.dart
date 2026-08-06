@@ -105,11 +105,22 @@ void main() {
     await tester.pump();
     expect(closeCount, 1);
 
-    for (final label in ['供应商', '编辑器', '任务', '通用', '关于']) {
+    for (final label in ['供应商', '编辑器', '任务', '通用', '外观', '关于']) {
       await tester.tap(find.text(label).first);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: '「$label」分区渲染异常/溢出');
     }
+
+    // 外观区块：切换主题强调色并验证持久化与回退
+    await tester.tap(find.text('外观').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('蓝'));
+    await tester.pumpAndSettle();
+    expect(settings.accentColor.toARGB32(), 0xFF3B82F6, reason: '主题色应切换为蓝色');
+    await tester.tap(find.text('青绿'));
+    await tester.pumpAndSettle();
+    expect(settings.accentColor.toARGB32(), 0xFF23B8A4, reason: '主题色应恢复默认青绿');
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('自定义供应商表单可新增并经二次确认删除', (tester) async {
@@ -188,6 +199,75 @@ void main() {
 
     expect(find.text('界面测试供应商'), findsNothing);
     expect(settings.customProviders, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('设置页区块切换为同向上下滑动', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 向下切换：供应商 → 编辑器（direction = 1）
+    await tester.tap(find.text('编辑器').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    final dys = tester
+        .widgetList<SlideTransition>(find.byType(SlideTransition))
+        .where((w) => w.position.value != Offset.zero)
+        .map((w) => w.position.value.dy)
+        .toList();
+    // 同向上移的中间态：新区块在下方（dy>0）滑入、旧区块在上方（dy<0）滑出
+    expect(dys.any((dy) => dy > 0), isTrue, reason: '新区块应从下滑入（dy>0）');
+    expect(dys.any((dy) => dy < 0), isTrue, reason: '旧区块应向上滑出（dy<0）');
+    await tester.pumpAndSettle();
+
+    // 切换完成后无位移残留（不空白）
+    final settled = tester
+        .widgetList<SlideTransition>(find.byType(SlideTransition))
+        .where((w) => w.position.value != Offset.zero)
+        .toList();
+    expect(settled, isEmpty, reason: '切换完成后应静止原位');
     expect(tester.takeException(), isNull);
   });
 }

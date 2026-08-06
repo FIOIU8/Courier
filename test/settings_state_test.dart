@@ -1,10 +1,12 @@
 import 'dart:convert';
 
+import 'package:courier_flutter/services/app_error.dart';
 import 'package:courier_flutter/services/app_logger.dart';
 import 'package:courier_flutter/services/courier_service.dart';
 import 'package:courier_flutter/services/models.dart';
 import 'package:courier_flutter/services/secure_storage_service.dart';
 import 'package:courier_flutter/services/settings_state.dart';
+import 'package:flutter/material.dart' show Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -90,6 +92,80 @@ void main() {
     expect(logger.minimumLevel, AppLogLevel.info);
     await settings.setLogLevel(AppLogLevel.debug);
     expect(logger.minimumLevel, AppLogLevel.debug);
+  });
+
+  test('主题强调色持久化、校验与回退', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(
+      settings.accentColor.toARGB32(),
+      SettingsState.defaultAccentColorValue,
+    );
+
+    await settings.setAccentColor(SettingsState.accentPalette[1]);
+    expect(
+      settings.accentColor.toARGB32(),
+      SettingsState.accentPalette[1].toARGB32(),
+    );
+
+    // 非法色（不在色板内）应被拒绝
+    await expectLater(
+      settings.setAccentColor(const Color(0xFFFF0000)),
+      throwsA(isA<CourierException>()),
+    );
+    expect(
+      settings.accentColor.toARGB32(),
+      SettingsState.accentPalette[1].toARGB32(),
+      reason: '非法色不应改变当前主题色',
+    );
+
+    // 重新加载后保持已持久化的主题色
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(
+      reloaded.accentColor.toARGB32(),
+      SettingsState.accentPalette[1].toARGB32(),
+    );
+  });
+
+  test('毛玻璃开关与强度持久化并限制范围', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.glassEnabled, isTrue);
+    expect(settings.blurSigma, 14);
+
+    await settings.setGlassEnabled(false);
+    await settings.setBlurSigma(22);
+    expect(settings.glassEnabled, isFalse);
+    expect(settings.blurSigma, 22);
+
+    // 超出范围的值被钳制
+    await settings.setBlurSigma(99);
+    expect(settings.blurSigma, 30);
+    await settings.setBlurSigma(-5);
+    expect(settings.blurSigma, 0);
+
+    // 重新加载后保持
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.glassEnabled, isFalse);
+    expect(reloaded.blurSigma, 0);
   });
 
   test('偏好写入失败时不提交内存状态', () async {

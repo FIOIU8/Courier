@@ -4,17 +4,37 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:courier_flutter/main.dart' show StartupFailureApp;
+import 'package:courier_flutter/services/secure_storage_service.dart';
+import 'package:courier_flutter/services/settings_state.dart';
 import 'package:courier_flutter/widgets/glass.dart';
+
+import 'support/test_fakes.dart';
 
 void main() {
   testWidgets('Glass 组件可渲染内容', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    addTearDown(settings.dispose);
+
     await tester.pumpWidget(
-      const MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: Glass(padding: EdgeInsets.all(16), child: Text('玻璃容器')),
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Glass(padding: EdgeInsets.all(16), child: Text('玻璃容器')),
+            ),
           ),
         ),
       ),

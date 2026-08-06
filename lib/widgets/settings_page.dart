@@ -36,7 +36,6 @@ class _SettingsPageState extends State<SettingsPage> {
     (label: '关于', icon: Icons.info_outline),
   ];
 
-  final TextEditingController _modelController = TextEditingController();
   int _activeSection = 0;
 
   /// 区块切换滑动方向：1 = 新区块从右滑入；-1 = 从左滑入
@@ -44,24 +43,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 模糊强度拖动中的临时值（null = 未在拖动）
   double? _dragBlurSigma;
-  bool _initialized = false;
-  bool _loadingModels = false;
   bool _savingProvider = false;
-  List<AIModelOption> _availableModels = const [];
   String? _error;
   bool _errorCopied = false;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initialized) return;
-    _initialized = true;
-    _modelController.text = context.read<SettingsState>().aiModelId;
-  }
-
-  @override
   void dispose() {
-    _modelController.dispose();
     super.dispose();
   }
 
@@ -69,51 +56,9 @@ class _SettingsPageState extends State<SettingsPage> {
     final settings = context.read<SettingsState>();
     try {
       await settings.setAiProviderId(providerId);
-      _availableModels = const [];
       setState(() => _error = null);
     } catch (error) {
       _showError(error);
-    }
-  }
-
-  Future<void> _saveModel() async {
-    try {
-      await context.read<SettingsState>().setAiModelId(_modelController.text);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('模型设置已保存')));
-      }
-    } catch (error) {
-      _showError(error);
-    }
-  }
-
-  Future<void> _refreshModels() async {
-    final settings = context.read<SettingsState>();
-    if (!settings.apiKeyConfigured) {
-      _showError('请先保存 API Key 再读取模型列表');
-      return;
-    }
-
-    setState(() {
-      _loadingModels = true;
-      _error = null;
-    });
-    try {
-      final models = await context.read<CourierService>().refreshAIModels();
-      if (mounted) setState(() => _availableModels = models);
-    } on CourierException catch (error) {
-      // 直接展示 API 返回的错误信息（如 "Authentication Fails, Your api key is invalid"）
-      _showError(
-        error.code == 'MODELS_NOT_SUPPORTED'
-            ? '该供应商不支持自动获取，可在下方手动添加模型'
-            : error.message,
-      );
-    } catch (error) {
-      _showError(error);
-    } finally {
-      if (mounted) setState(() => _loadingModels = false);
     }
   }
 
@@ -239,10 +184,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
     try {
       await settings.deleteCustomProvider(provider.id);
-      if (deletingCurrent) {
-        _modelController.clear();
-        _availableModels = const [];
-      }
+      if (deletingCurrent) {}
     } catch (error) {
       _showError(error);
     }
@@ -530,74 +472,49 @@ class _SettingsPageState extends State<SettingsPage> {
         if (settings.customProviders.isNotEmpty)
           _buildCustomProviderList(settings.customProviders),
         _settingRow(
-          label: '模型',
+          label: '默认模型',
           control: SizedBox(
             width: 360,
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _modelController,
-                    maxLength: 128,
+            child: settings.aiModelIds.isEmpty
+                ? const Text(
+                    '先添加模型',
+                    style: TextStyle(fontSize: 12, color: Colors.white38),
+                  )
+                : DropdownButtonFormField<String>(
+                    key: ValueKey(settings.aiModelId),
+                    initialValue: settings.aiModelIds.contains(
+                      settings.aiModelId,
+                    )
+                        ? settings.aiModelId
+                        : null,
                     decoration: const InputDecoration(
                       isDense: true,
-                      counterText: '',
+                      hintText: '选择默认模型',
                     ),
-                    onSubmitted: (_) => _saveModel(),
-                  ),
-                ),
-                IconButton(
-                  tooltip: '保存模型',
-                  onPressed: _saveModel,
-                  icon: const Icon(Icons.save_outlined, size: 18),
-                ),
-                IconButton(
-                  tooltip: '读取模型列表',
-                  onPressed: _loadingModels ? null : _refreshModels,
-                  icon: _loadingModels
-                      ? const SizedBox(
-                          width: 15,
-                          height: 15,
-                          child: CircularProgressIndicator(strokeWidth: 1.5),
+                    items: settings.aiModelIds
+                        .map(
+                          (model) => DropdownMenuItem(
+                            value: model,
+                            child: Text(
+                              model,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                         )
-                      : const Icon(Icons.refresh, size: 18),
-                ),
-              ],
-            ),
+                        .toList(growable: false),
+                    onChanged: (model) {
+                      if (model != null) {
+                        unawaited(
+                          _applySetting(
+                            () => settings.setAiModelId(model),
+                          ),
+                        );
+                      }
+                    },
+                  ),
           ),
         ),
-        if (_availableModels.isNotEmpty)
-          _settingRow(
-            label: '可用模型',
-            control: SizedBox(
-              width: 360,
-              child: DropdownButtonFormField<String>(
-                initialValue:
-                    _availableModels.any(
-                      (model) => model.id == settings.aiModelId,
-                    )
-                    ? settings.aiModelId
-                    : null,
-                decoration: const InputDecoration(isDense: true),
-                items: _availableModels
-                    .map(
-                      (model) => DropdownMenuItem(
-                        value: model.id,
-                        child: Text(
-                          model.displayName,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: (model) {
-                  if (model == null) return;
-                  _modelController.text = model;
-                  unawaited(_saveModel());
-                },
-              ),
-            ),
-          ),
+        _buildMyModelsSection(settings),
         _sliderRow(
           label: '温度',
           value: settings.aiTemperature,
@@ -640,6 +557,184 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
       ],
     );
+  }
+
+  /// "我的模型"列表：含默认标记、设为默认/删除操作与"添加模型"入口。
+  Widget _buildMyModelsSection(SettingsState settings) {
+    final modelIds = settings.aiModelIds;
+    final atCapacity = modelIds.length >= SettingsState.maxAiModels;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        children: [
+          const Divider(height: 1, color: kGlassBorder),
+          if (modelIds.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                children: [
+                  SizedBox(width: 12),
+                  Icon(Icons.inbox_outlined, size: 16, color: Colors.white38),
+                  SizedBox(width: 10),
+                  Text(
+                    '尚未添加模型',
+                    style: TextStyle(fontSize: 12, color: Colors.white38),
+                  ),
+                ],
+              ),
+            )
+          else
+            for (var index = 0; index < modelIds.length; index++) ...[
+              Padding(
+                key: ValueKey('ai-model-${modelIds[index]}'),
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 12),
+                    Icon(
+                      Icons.smart_toy_outlined,
+                      size: 15,
+                      color: accentLightOf(context),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        modelIds[index],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    if (modelIds[index] == settings.aiModelId)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(
+                          '默认',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: accentLightOf(context),
+                          ),
+                        ),
+                      )
+                    else
+                      IconButton(
+                        tooltip: '设为默认',
+                        onPressed: () => unawaited(
+                          _applySetting(
+                            () => settings.setAiModelId(modelIds[index]),
+                          ),
+                        ),
+                        icon: const Icon(Icons.star_outline, size: 16),
+                      ),
+                    IconButton(
+                      tooltip: '删除模型',
+                      onPressed: () => unawaited(_removeModel(modelIds[index])),
+                      icon: const Icon(Icons.delete_outline, size: 16),
+                    ),
+                  ],
+                ),
+              ),
+              if (index != modelIds.length - 1)
+                const Divider(height: 1, color: kGlassBorder),
+            ],
+          const Divider(height: 1, color: kGlassBorder),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    atCapacity
+                        ? '模型数量已达上限（${SettingsState.maxAiModels}）'
+                        : '共 ${modelIds.length} 个模型',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.white38,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  key: const ValueKey('add-model-button'),
+                  onPressed: atCapacity ? null : _showAddModelDialog,
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('添加模型'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 打开"添加模型"弹窗（从列表选择 / 手动输入），确认后批量加入集合。
+  Future<void> _showAddModelDialog() async {
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (dialogContext) => const _AddModelDialog(),
+    );
+    if (result == null || result.isEmpty || !mounted) return;
+    final settings = context.read<SettingsState>();
+    // 已存在于集合中的模型 addAiModel 视为无操作，先过滤再校验容量
+    final toAdd = result
+        .where((model) => !settings.aiModelIds.contains(model))
+        .toList(growable: false);
+    if (toAdd.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('所选模型已在列表中')),
+        );
+      }
+      return;
+    }
+    final remaining = SettingsState.maxAiModels - settings.aiModelIds.length;
+    if (toAdd.length > remaining) {
+      _showError('模型数量已达上限（最多 ${SettingsState.maxAiModels} 个），本次仅可添加 $remaining 个');
+      return;
+    }
+    try {
+      for (final model in toAdd) {
+        await settings.addAiModel(model);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已添加 ${toAdd.length} 个模型')),
+        );
+      }
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _removeModel(String modelId) async {
+    final settings = context.read<SettingsState>();
+    if (settings.aiModelId == modelId && settings.aiModelIds.length > 1) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          shape: kDialogShape,
+          backgroundColor: kGlassFloatBg,
+          title: const Text('删除默认模型'),
+          content: const Text('删除后默认模型将自动回退为列表中的第一个模型。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    try {
+      await settings.removeAiModel(modelId);
+    } catch (error) {
+      _showError(error);
+    }
   }
 
   Widget _buildCustomProviderList(List<CustomAIProvider> providers) {
@@ -1602,6 +1697,267 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
         requestMode: _requestMode,
         systemPrompt: _systemPromptController.text.trim(),
         deleteApiKey: false,
+      ),
+    );
+  }
+}
+
+/// "添加模型"弹窗：内置"从列表选择"与"手动输入"两个入口。
+/// 从列表选择：进入时自动刷新供应商模型列表；失败时给出友好提示并引导手动输入。
+/// 确认后返回要加入集合的模型标识列表（由调用方批量 [SettingsState.addAiModel]）。
+class _AddModelDialog extends StatefulWidget {
+  const _AddModelDialog();
+
+  @override
+  State<_AddModelDialog> createState() => _AddModelDialogState();
+}
+
+class _AddModelDialogState extends State<_AddModelDialog> {
+  static const String _fromListMode = 'from-list';
+  static const String _manualMode = 'manual';
+
+  final TextEditingController _manualController = TextEditingController();
+  final Set<String> _selected = {};
+  String _mode = _fromListMode;
+  bool _loadingModels = false;
+  List<AIModelOption> _availableModels = const [];
+  String? _listError;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_refreshModels());
+    });
+  }
+
+  @override
+  void dispose() {
+    _manualController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refreshModels() async {
+    final settings = context.read<SettingsState>();
+    if (!settings.apiKeyConfigured) {
+      setState(() {
+        _loadingModels = false;
+        _listError = '请先保存 API Key 再读取模型列表';
+      });
+      return;
+    }
+    setState(() {
+      _loadingModels = true;
+      _listError = null;
+    });
+    try {
+      final models = await context.read<CourierService>().refreshAIModels();
+      if (mounted) {
+        setState(() {
+          _availableModels = models;
+          _loadingModels = false;
+        });
+      }
+    } on CourierException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _listError = error.code == 'MODELS_NOT_SUPPORTED'
+            ? '该供应商不支持自动获取，请使用手动输入添加模型'
+            : error.message;
+        _loadingModels = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _listError = '$error';
+        _loadingModels = false;
+      });
+    }
+  }
+
+  List<String>? _submit() {
+    if (_mode == _manualMode) {
+      final model = _manualController.text.trim();
+      if (model.isEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('请输入模型标识')));
+        return null;
+      }
+      return [model];
+    }
+    if (_selected.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请至少选择一个模型')));
+      return null;
+    }
+    return _selected.toList(growable: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: kDialogShape,
+      backgroundColor: kGlassFloatBg,
+      title: const Text('添加模型'),
+      content: SizedBox(
+        width: 460,
+        height: 380,
+        child: Column(
+          children: [
+            SegmentedButton<String>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                  value: _fromListMode,
+                  icon: Icon(Icons.list_alt, size: 15),
+                  label: Text('从列表选择'),
+                ),
+                ButtonSegment(
+                  value: _manualMode,
+                  icon: Icon(Icons.edit_outlined, size: 15),
+                  label: Text('手动输入'),
+                ),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (selection) {
+                setState(() => _mode = selection.first);
+              },
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 11)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: _mode == _fromListMode
+                  ? _buildListPane()
+                  : _buildManualPane(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            final result = _submit();
+            if (result != null) Navigator.of(context).pop(result);
+          },
+          icon: const Icon(Icons.add, size: 17),
+          label: const Text('添加'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildListPane() {
+    if (_loadingModels) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    final error = _listError;
+    if (error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 22,
+                color: Color(0xFFF59E0B),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                error,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: Color(0xFFFDE68A)),
+              ),
+              const SizedBox(height: 10),
+              TextButton.icon(
+                onPressed: () => setState(() => _mode = _manualMode),
+                icon: const Icon(Icons.edit_outlined, size: 15),
+                label: const Text('切换到手动输入'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_availableModels.isEmpty) {
+      return const Center(
+        child: Text(
+          '未获取到模型列表，可切换到手动输入',
+          style: TextStyle(fontSize: 12, color: Colors.white38),
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: _availableModels.length,
+      itemBuilder: (context, index) {
+        final model = _availableModels[index];
+        return CheckboxListTile(
+          dense: true,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: _selected.contains(model.id),
+          title: Text(
+            model.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12.5),
+          ),
+          subtitle: Text(
+            model.id,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+          onChanged: (checked) {
+            setState(() {
+              if (checked ?? false) {
+                _selected.add(model.id);
+              } else {
+                _selected.remove(model.id);
+              }
+            });
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildManualPane() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _manualController,
+            autofocus: true,
+            maxLength: 128,
+            decoration: const InputDecoration(
+              isDense: true,
+              counterText: '',
+              labelText: '模型标识',
+              hintText: '如 gpt-4o 或 claude-sonnet-4-5',
+            ),
+            onSubmitted: (_) {
+              final result = _submit();
+              if (result != null) Navigator.of(context).pop(result);
+            },
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '手动输入适用于不支持自动获取模型列表的供应商',
+            style: TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+        ],
       ),
     );
   }

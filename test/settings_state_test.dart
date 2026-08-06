@@ -425,4 +425,154 @@ void main() {
     expect(settings.aiProviderId, 'openai');
     expect(settings.aiMaxTokens, SettingsState.standardAiMaxTokens);
   });
+
+  test('模型集合支持增删、去重、非法标识拒绝与持久化往返', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.aiModelIds, isEmpty);
+
+    await settings.addAiModel('gpt-4o');
+    await settings.addAiModel('gpt-4o'); // 去重：已存在视为成功
+    await settings.addAiModel('claude-sonnet-4-5');
+    expect(settings.aiModelIds, ['gpt-4o', 'claude-sonnet-4-5']);
+
+    // 非法标识被拒绝且不改变集合
+    await expectLater(
+      settings.addAiModel('invalid\u0000model'),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    await expectLater(
+      settings.addAiModel(''),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    expect(settings.aiModelIds, hasLength(2));
+
+    // ai_model_ids 持久化往返
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.aiModelIds, ['gpt-4o', 'claude-sonnet-4-5']);
+
+    // 移除非默认模型；移除不存在模型为无操作
+    await settings.removeAiModel('gpt-4o');
+    expect(settings.aiModelIds, ['claude-sonnet-4-5']);
+    await settings.removeAiModel('not-exists');
+    expect(settings.aiModelIds, ['claude-sonnet-4-5']);
+  });
+
+  test('模型集合数量上限为 maxAiModels', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    for (var index = 0; index < SettingsState.maxAiModels; index++) {
+      await settings.addAiModel('model-$index');
+    }
+    expect(settings.aiModelIds.length, SettingsState.maxAiModels);
+    await expectLater(
+      settings.addAiModel('overflow-model'),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    expect(settings.aiModelIds.length, SettingsState.maxAiModels);
+  });
+
+  test('默认模型约束：隐式加入集合、删除回退与置空', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    // 设置默认模型时自动加入集合（隐式 addAiModel）
+    await settings.setAiModelId('default-model');
+    expect(settings.aiModelIds, ['default-model']);
+    expect(settings.aiModelId, 'default-model');
+
+    await settings.addAiModel('second-model');
+    await settings.setAiModelId('second-model');
+    expect(settings.aiModelIds, ['default-model', 'second-model']);
+    expect(settings.aiModelId, 'second-model');
+
+    // 删除默认模型 → 回退为集合第一个
+    await settings.removeAiModel('second-model');
+    expect(settings.aiModelId, 'default-model');
+    expect(settings.aiModelIds, ['default-model']);
+
+    // 删除集合最后一个模型 → 默认模型置空并清除 ai_model
+    await settings.removeAiModel('default-model');
+    expect(settings.aiModelId, isEmpty);
+    expect(settings.aiModelIds, isEmpty);
+    expect(settings.aiConfigurationReady, isFalse);
+
+    // 置空默认模型时集合保留
+    await settings.addAiModel('keep-me');
+    await settings.setAiModelId('');
+    expect(settings.aiModelId, isEmpty);
+    expect(settings.aiModelIds, ['keep-me']);
+  });
+
+  test('旧数据迁移：仅有 ai_model 时初始化为单元素集合', () async {
+    SharedPreferences.setMockInitialValues({
+      'ai_provider': 'openai',
+      'ai_model': 'legacy-model',
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.aiModelId, 'legacy-model');
+    expect(settings.aiModelIds, ['legacy-model']);
+  });
+
+  test('load 时 ai_model 不在集合内则补入（环境变量模型）', () async {
+    SharedPreferences.setMockInitialValues({
+      'ai_model_ids': jsonEncode(['existing-model']),
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {'COURIER_AI_MODEL_ID': 'env-model'},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.aiModelId, 'env-model');
+    expect(settings.aiModelIds, containsAll(['existing-model', 'env-model']));
+  });
+
+  test('load 时集合已满则替换首位保证默认模型在集合内且不超上限', () async {
+    final storedIds = List<String>.generate(
+      SettingsState.maxAiModels,
+      (index) => 'stored-$index',
+      growable: false,
+    );
+    SharedPreferences.setMockInitialValues({
+      'ai_model_ids': jsonEncode(storedIds),
+      'ai_model': 'stored-0',
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {'COURIER_AI_MODEL_ID': 'env-model'},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.aiModelId, 'env-model');
+    expect(settings.aiModelIds, hasLength(SettingsState.maxAiModels));
+    expect(settings.aiModelIds.first, 'env-model');
+    expect(settings.aiModelIds.contains('env-model'), isTrue);
+  });
 }

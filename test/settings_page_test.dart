@@ -425,9 +425,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.tap(find.byKey(const ValueKey('add-model-button')));
     await tester.pumpAndSettle();
     expect(find.text('请先保存 API Key 再读取模型列表'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
@@ -480,9 +482,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.tap(find.byKey(const ValueKey('add-model-button')));
     await tester.pumpAndSettle();
-    expect(find.text('该供应商不支持自动获取，可在下方手动添加模型'), findsOneWidget);
+    expect(
+      find.text('该供应商不支持自动获取，请使用手动输入添加模型'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
@@ -540,13 +547,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('读取模型列表'));
+    await tester.tap(find.byKey(const ValueKey('add-model-button')));
     await tester.pumpAndSettle();
     expect(
       find.text('Authentication Fails, Your api key is invalid'),
       findsOneWidget,
     );
     expect(find.textContaining('CourierException'), findsNothing);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
@@ -619,8 +628,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('读取模型列表'));
+    // 手动输入含控制字符的模型标识触发校验错误，错误条出现在设置页并可复制
+    await tester.tap(find.byKey(const ValueKey('add-model-button')));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('手动输入'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, '模型标识'),
+      'bad\u0000model',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '添加'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('供应商模型标识无效'), findsOneWidget);
     await tester.tap(find.byTooltip('复制错误信息'));
     await tester.pump();
 
@@ -630,11 +650,91 @@ void main() {
     final arguments = copyCall.arguments as Map<Object?, Object?>;
     expect(
       arguments['text'],
-      'Authentication Fails, Your api key is invalid',
+      'CourierException(INVALID_SETTING): 供应商模型标识无效',
     );
     expect(find.byIcon(Icons.check), findsOneWidget, reason: '复制后应显示对勾反馈');
     // 推进时间让复制反馈的 2 秒计时器完成
     await tester.pump(const Duration(seconds: 2));
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('模型区冒烟：默认模型下拉、删除回退与手动添加', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.addAiModel('gpt-4o');
+    await settings.addAiModel('claude-sonnet-4-5');
+    await settings.setAiModelId('gpt-4o');
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 默认模型下拉与"我的模型"列表
+    expect(find.text('默认模型'), findsOneWidget);
+    expect(find.text('gpt-4o'), findsWidgets);
+    expect(find.text('默认'), findsOneWidget, reason: '当前默认模型应带默认标记');
+    expect(find.text('共 2 个模型'), findsOneWidget);
+
+    // 删除默认模型：确认后回退到列表第一个
+    await tester.tap(find.byTooltip('删除模型').first);
+    await tester.pumpAndSettle();
+    expect(find.text('删除默认模型'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(settings.aiModelId, 'claude-sonnet-4-5', reason: '删除默认模型后应回退');
+    expect(settings.aiModelIds, ['claude-sonnet-4-5']);
+    expect(find.text('默认'), findsOneWidget, reason: '回退后的模型应带默认标记');
+
+    // 手动输入添加模型
+    await tester.tap(find.byKey(const ValueKey('add-model-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('手动输入'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, '模型标识'),
+      'manual-model',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '添加'));
+    await tester.pumpAndSettle();
+    expect(settings.aiModelIds, ['claude-sonnet-4-5', 'manual-model']);
+    expect(find.text('manual-model'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 }

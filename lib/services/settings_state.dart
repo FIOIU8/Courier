@@ -23,6 +23,10 @@ class SettingsState extends ChangeNotifier {
   static const int maxSystemPromptLength = 4000;
   static const int _maxCustomProviders = 50;
   static const String _customProvidersKey = 'custom_ai_providers';
+
+  /// 模型集合上限
+  static const int maxAiModels = 50;
+  static const String _aiModelIdsKey = 'ai_model_ids';
   static final Random _secureRandom = Random.secure();
 
   /// 默认强调色（teal，对齐原项目主色调）
@@ -61,6 +65,7 @@ class SettingsState extends ChangeNotifier {
 
   /// 每个供应商单独保存的请求方式；未保存时按供应商协议取默认值
   final Map<String, AIRequestMode> _aiRequestModes = {};
+  List<String> _aiModelIds = const [];
   bool _apiKeyConfigured = false;
   List<CustomAIProvider> _customProviders = const [];
   int _editorFontSize = 14;
@@ -105,6 +110,9 @@ class SettingsState extends ChangeNotifier {
       _compatibleRequestModes(_aiProviderId);
 
   String get aiSystemPrompt => _aiSystemPrompt;
+
+  /// 已添加的模型集合（不可变视图，默认模型始终 ∈ 集合或为空）
+  List<String> get aiModelIds => List<String>.unmodifiable(_aiModelIds);
 
   bool get apiKeyConfigured => _apiKeyConfigured;
   List<CustomAIProvider> get customProviders =>
@@ -171,7 +179,7 @@ class SettingsState extends ChangeNotifier {
 
     final environmentModel = _environment['COURIER_AI_MODEL_ID']?.trim();
     final storedModel = preferences.getString('ai_model')?.trim();
-    _aiModelId = _validatedModel(
+    final resolvedModel = validateModel(
       environmentModel ?? storedModel ?? '',
       fallbackToEmpty: true,
     );
@@ -181,6 +189,25 @@ class SettingsState extends ChangeNotifier {
     _aiRequestModes
       ..clear()
       ..addAll(_readRequestModes(preferences.getString('ai_request_modes')));
+    // 模型集合：优先读取 ai_model_ids；旧数据（仅有 ai_model）迁移为单元素集合；
+    // 环境变量模型作为默认模型并补入集合，保证默认模型 ∈ 集合的一致性。
+    final storedModelIds = preferences.getString(_aiModelIdsKey);
+    var modelIds = <String>[];
+    if (storedModelIds != null) {
+      modelIds = _decodeAiModelIds(storedModelIds);
+    } else if (resolvedModel.isNotEmpty) {
+      modelIds = [resolvedModel];
+    }
+    if (resolvedModel.isNotEmpty && !modelIds.contains(resolvedModel)) {
+      if (modelIds.length >= maxAiModels) {
+        // 集合已满：默认模型置于首位并截断，保证默认模型 ∈ 集合且不超上限
+        modelIds = [resolvedModel, ...modelIds.take(maxAiModels - 1)];
+      } else {
+        modelIds = [...modelIds, resolvedModel];
+      }
+    }
+    _aiModelIds = List<String>.unmodifiable(modelIds);
+    _aiModelId = resolvedModel;
 
     _editorFontSize = _boundedInt(
       preferences.getInt('editor_font_size') ?? 14,
@@ -465,10 +492,76 @@ class SettingsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置默认模型：只能设置为集合内已有模型（或空值置空）；
+  /// 若值不在集合内则自动加入（隐式 addAiModel，保证默认模型 ∈ 集合）。
   Future<void> setAiModelId(String value) async {
-    final model = _validatedModel(value);
-    await _persist((preferences) => preferences.setString('ai_model', model));
+    final model = validateModel(value);
+    if (model == _aiModelId && (model.isEmpty || _aiModelIds.contains(model))) {
+      return;
+    }
+    var ids = List<String>.from(_aiModelIds);
+    if (model.isNotEmpty && !ids.contains(model)) {
+      if (ids.length >= maxAiModels) {
+        throw const CourierException('INVALID_SETTING', '模型数量已达到上限');
+      }
+      ids = [...ids, model];
+    }
+    await _persist((preferences) async {
+      if (!await preferences.setString('ai_model', model)) return false;
+      return preferences.setString(_aiModelIdsKey, jsonEncode(ids));
+    });
+    _aiModelIds = List<String>.unmodifiable(ids);
     _aiModelId = model;
+    notifyListeners();
+  }
+
+  /// 添加模型到集合：去重（已存在视为成功）、数量上限、沿用模型标识校验。
+  Future<void> addAiModel(String id) async {
+    final model = validateModel(id);
+    if (model.isEmpty) {
+      throw const CourierException('INVALID_SETTING', '供应商模型标识无效');
+    }
+    if (_aiModelIds.contains(model)) return;
+    if (_aiModelIds.length >= maxAiModels) {
+      throw const CourierException('INVALID_SETTING', '模型数量已达到上限');
+    }
+    final updated = [..._aiModelIds, model];
+    await _persist(
+      (preferences) => preferences.setString(
+        _aiModelIdsKey,
+        jsonEncode(updated),
+      ),
+    );
+    _aiModelIds = List<String>.unmodifiable(updated);
+    notifyListeners();
+  }
+
+  /// 从集合移除模型；若移除的是默认模型，默认模型回退为集合第一个
+  /// （集合为空则置空并清除 ai_model）。
+  Future<void> removeAiModel(String id) async {
+    final model = id.trim();
+    if (model.isEmpty) return;
+    final index = _aiModelIds.indexOf(model);
+    if (index < 0) return;
+    final updated = [..._aiModelIds]..removeAt(index);
+    var defaultModel = _aiModelId;
+    var defaultChanged = false;
+    if (defaultModel == model) {
+      defaultModel = updated.isEmpty ? '' : updated.first;
+      defaultChanged = true;
+    }
+    await _persist((preferences) async {
+      if (!await preferences.setString(_aiModelIdsKey, jsonEncode(updated))) {
+        return false;
+      }
+      if (defaultChanged &&
+          !await preferences.setString('ai_model', defaultModel)) {
+        return false;
+      }
+      return true;
+    });
+    _aiModelIds = List<String>.unmodifiable(updated);
+    if (defaultChanged) _aiModelId = defaultModel;
     notifyListeners();
   }
 
@@ -669,7 +762,9 @@ class SettingsState extends ChangeNotifier {
   AIRequestMode _defaultRequestModeFor(String providerId) =>
       _compatibleRequestModes(providerId).first;
 
-  static String _validatedModel(String value, {bool fallbackToEmpty = false}) {
+  /// 校验模型标识：去首尾空白、长度与控制字符限制；
+  /// [fallbackToEmpty] 为 true 时非法值回退为空串而非抛出。
+  static String validateModel(String value, {bool fallbackToEmpty = false}) {
     final model = value.trim();
     if (model.length > 128 || model.contains(RegExp(r'[\x00-\x1f]'))) {
       if (fallbackToEmpty) return '';
@@ -789,6 +884,25 @@ class SettingsState extends ChangeNotifier {
         }
       }
       return List<CustomAIProvider>.unmodifiable(providers);
+    } on FormatException {
+      return const [];
+    }
+  }
+
+  static List<String> _decodeAiModelIds(String? value) {
+    if (value == null || value.trim().isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! List) return const [];
+      final ids = <String>[];
+      final seen = <String>{};
+      for (final item in decoded.take(maxAiModels)) {
+        if (item is! String) continue;
+        final model = validateModel(item, fallbackToEmpty: true);
+        if (model.isEmpty || !seen.add(model)) continue;
+        ids.add(model);
+      }
+      return List<String>.unmodifiable(ids);
     } on FormatException {
       return const [];
     }

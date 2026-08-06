@@ -47,9 +47,16 @@ Future<void> main() async {
           minimumSize: Size(1024, 720),
           titleBarStyle: TitleBarStyle.hidden,
           backgroundColor: Color(0xFF0C1220),
+          center: true,
         ),
         () async {
+          // 首次显示前先居中（尽力而为）。
+          await windowManager.center();
           await windowManager.show();
+          // 部分 Windows 环境下窗口真正显示前设置的位置不生效，
+          // 等窗口显示、几何/DPI 就绪后再居中一次纠正；若已居中则为无操作。
+          await Future<void>.delayed(const Duration(milliseconds: 120));
+          await windowManager.center();
         },
       );
     }

@@ -71,6 +71,100 @@ void main() {
     expect(credentialStore.values, isEmpty);
   });
 
+  test('请求方式按供应商保存、校验与读盘回退', () async {
+    SharedPreferences.setMockInitialValues({
+      'ai_request_modes': jsonEncode({
+        'openai': 'responses',
+        'anthropic': 'responses', // 与 anthropic 协议不兼容 → 读盘丢弃
+        'unknown-provider': 'responses', // 非已知供应商 → 丢弃
+      }),
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.aiRequestMode, AIRequestMode.responses);
+    expect(settings.aiRequestModes, [
+      AIRequestMode.chatCompletions,
+      AIRequestMode.responses,
+    ]);
+
+    // anthropic 供应商：不兼容方式被拒绝，未保存时按协议取默认
+    await expectLater(
+      settings.setAiRequestModeFor('anthropic', AIRequestMode.responses),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    await settings.setAiProviderId('anthropic');
+    expect(settings.aiRequestMode, AIRequestMode.anthropic);
+    expect(settings.aiRequestModes, [AIRequestMode.anthropic]);
+
+    // openai 的保存值不受 anthropic 切换影响
+    await settings.setAiProviderId('openai');
+    expect(settings.aiRequestMode, AIRequestMode.responses);
+
+    // 重新加载后保留上次选择
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.aiRequestMode, AIRequestMode.responses);
+  });
+
+  test('自定义供应商协议决定请求方式选项并随删除清理', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    final provider = await settings.addCustomProvider(
+      displayName: '中转站',
+      baseUrl: 'https://api.example.com/',
+      supportsMillionContext: true,
+    );
+    await settings.setAiProviderId(provider.id);
+    expect(settings.aiRequestModes, contains(AIRequestMode.responses));
+    await settings.setAiRequestModeFor(provider.id, AIRequestMode.responses);
+    expect(settings.aiRequestMode, AIRequestMode.responses);
+
+    // 删除当前供应商后其请求方式记录被清理，回退 openai 默认
+    await settings.deleteCustomProvider(provider.id);
+    expect(settings.aiProviderId, 'openai');
+    expect(settings.aiRequestMode, AIRequestMode.chatCompletions);
+  });
+
+  test('系统提示词持久化、去控制字符并限制长度', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.aiSystemPrompt, isEmpty);
+    await settings.setAiSystemPrompt('你是代码助手\n保持简洁。');
+    expect(settings.aiSystemPrompt, '你是代码助手\n保持简洁。');
+
+    // 超长截断，控制字符（除换行/制表外）被清除
+    await settings.setAiSystemPrompt('${'a' * 5000}\u0000');
+    expect(settings.aiSystemPrompt, 'a' * 4000);
+
+    // 重新加载后保留
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.aiSystemPrompt, 'a' * 4000);
+  });
+
   test('CourierService 实时同步日志级别', () async {
     final secureStorage = SecureStorageService(store: MemoryCredentialStore());
     final settings = SettingsState(

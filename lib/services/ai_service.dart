@@ -27,6 +27,7 @@ class AIProviderRequest {
   final int maxTokens;
   final List<AIConversationMessage> messages;
   final String apiKey;
+  final AIRequestMode requestMode;
 
   const AIProviderRequest({
     required this.requestId,
@@ -35,6 +36,7 @@ class AIProviderRequest {
     required this.maxTokens,
     required this.messages,
     required this.apiKey,
+    required this.requestMode,
   });
 }
 
@@ -250,83 +252,113 @@ class OfficialAIProviderClient implements AIProviderClient {
   @override
   Stream<String> sendMessageStream(AIProviderRequest request) async* {
     CourierException? lastError;
+    final paths = _chatPaths(request.requestMode);
     try {
+      attemptLoop:
       for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
         if (_cancelledRequests.contains(request.requestId)) {
           throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
         }
 
-        HttpClientRequest? httpRequest;
-        try {
-          httpRequest = await _client.postUrl(
-            baseUri.resolve(
-              protocol == ProviderProtocol.openaiCompatible
-                  ? 'responses'
-                  : 'messages',
-            ),
-          );
-          if (_cancelledRequests.contains(request.requestId)) {
-            httpRequest.abort();
-            throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
-          }
-          _activeRequests[request.requestId] = httpRequest;
-          _applyHeaders(httpRequest, request.apiKey, stream: true);
-          httpRequest.write(jsonEncode(_requestBody(request)));
-          final response = await httpRequest.close().timeout(_responseTimeout);
+        var retryTransportError = false;
+        for (var pathIndex = 0; pathIndex < paths.length; pathIndex++) {
+          final isLastPath = pathIndex == paths.length - 1;
+          HttpClientRequest? httpRequest;
+          try {
+            httpRequest = await _client.postUrl(paths[pathIndex]);
+            if (_cancelledRequests.contains(request.requestId)) {
+              httpRequest.abort();
+              throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
+            }
+            _activeRequests[request.requestId] = httpRequest;
+            _applyHeaders(httpRequest, request.apiKey, stream: true);
+            httpRequest.write(jsonEncode(_requestBody(request)));
+            final response = await httpRequest.close().timeout(_responseTimeout);
 
-          if (_isRetryable(response.statusCode) && attempt < _maxAttempts) {
-            await response.drain<void>();
-            await Future<void>.delayed(_retryDelay(response, attempt));
-            continue;
-          }
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            throw await _responseException(response);
-          }
+            if (_isRetryable(response.statusCode) && attempt < _maxAttempts) {
+              await response.drain<void>();
+              await Future<void>.delayed(_retryDelay(response, attempt));
+              continue attemptLoop;
+            }
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              final error = await _responseException(response);
+              if ((response.statusCode == 404 || response.statusCode == 405) &&
+                  !isLastPath) {
+                // 路径不存在（如仪表盘 SPA 只服务 /v1/* 的网关），尝试下一个路径
+                lastError = error;
+                continue;
+              }
+              throw error;
+            }
 
-          await for (final event in _decodeSse(
-            response,
-          ).timeout(_responseTimeout)) {
+            var yieldedAny = false;
+            await for (final event
+                in _decodeSse(response).timeout(_responseTimeout)) {
+              if (_cancelledRequests.contains(request.requestId)) {
+                throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
+              }
+              final delta = _extractDelta(event, request.requestMode);
+              if (delta != null && delta.isNotEmpty) {
+                yieldedAny = true;
+                yield delta;
+              }
+            }
+            if (!yieldedAny) {
+              // 2xx 但没有任何可解析的流式增量（例如网关返回了网页），
+              // 尝试下一个路径；全部失败时抛出可识别错误而非静默空回复。
+              lastError = const CourierException(
+                'INVALID_PROVIDER_RESPONSE',
+                '供应商返回了无法识别的响应，请检查 Base API 地址与模型配置是否正确',
+              );
+              if (!isLastPath) continue;
+              throw lastError;
+            }
+            return;
+          } on CourierException {
+            rethrow;
+          } on FormatException {
+            throw const CourierException(
+              'INVALID_PROVIDER_RESPONSE',
+              '供应商返回了无法识别的数据',
+            );
+          } on TimeoutException {
+            httpRequest?.abort();
+            lastError = const CourierException('PROVIDER_TIMEOUT', '供应商响应超时');
+            if (attempt >= _maxAttempts) throw lastError;
+            retryTransportError = true;
+            break;
+          } on SocketException {
+            lastError = const CourierException('PROVIDER_UNREACHABLE', '无法连接供应商');
+            if (attempt >= _maxAttempts) throw lastError;
+            retryTransportError = true;
+            break;
+          } on HttpException {
             if (_cancelledRequests.contains(request.requestId)) {
               throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
             }
-            final delta = _extractDelta(event);
-            if (delta != null && delta.isNotEmpty) {
-              yield delta;
-            }
+            lastError = const CourierException(
+              'PROVIDER_CONNECTION_FAILED',
+              '供应商连接异常',
+            );
+            if (attempt >= _maxAttempts) throw lastError;
+            retryTransportError = true;
+            break;
+          } finally {
+            _activeRequests.remove(request.requestId);
           }
-          return;
-        } on CourierException {
-          rethrow;
-        } on FormatException {
-          throw const CourierException(
-            'INVALID_PROVIDER_RESPONSE',
-            '供应商返回了无法识别的数据',
-          );
-        } on TimeoutException {
-          httpRequest?.abort();
-          lastError = const CourierException('PROVIDER_TIMEOUT', '供应商响应超时');
-          if (attempt >= _maxAttempts) throw lastError;
-        } on SocketException {
-          lastError = const CourierException('PROVIDER_UNREACHABLE', '无法连接供应商');
-          if (attempt >= _maxAttempts) throw lastError;
-        } on HttpException {
-          if (_cancelledRequests.contains(request.requestId)) {
-            throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
-          }
-          lastError = const CourierException(
-            'PROVIDER_CONNECTION_FAILED',
-            '供应商连接异常',
-          );
-          if (attempt >= _maxAttempts) throw lastError;
-        } finally {
-          _activeRequests.remove(request.requestId);
         }
+
         if (_cancelledRequests.contains(request.requestId)) {
           throw const CourierException('REQUEST_CANCELLED', '助手请求已取消');
         }
-        await Future<void>.delayed(
-          Duration(milliseconds: 250 * attempt * attempt),
-        );
+        if (retryTransportError) {
+          await Future<void>.delayed(
+            Duration(milliseconds: 250 * attempt * attempt),
+          );
+          continue attemptLoop;
+        }
+        // 所有路径均为 404/405 或空响应：非瞬时错误，直接透出
+        throw lastError ?? const CourierException('PROVIDER_ERROR', '供应商请求失败');
       }
       throw lastError ?? const CourierException('PROVIDER_ERROR', '供应商请求失败');
     } finally {
@@ -372,13 +404,30 @@ class OfficialAIProviderClient implements AIProviderClient {
     }
   }
 
+  /// 聊天端点候选路径。部分网关（如 New API 仪表盘）在根路径返回网页、
+  /// 只在 /v1/ 前缀下提供 API，因此与 [listModels] 一样在缺少 /v1/ 时回退到
+  /// /v1/ 端点。
+  List<Uri> _chatPaths(AIRequestMode mode) {
+    final endpoint = switch (mode) {
+      AIRequestMode.responses => 'responses',
+      AIRequestMode.chatCompletions => 'chat/completions',
+      AIRequestMode.anthropic => 'messages',
+    };
+    final paths = <Uri>[baseUri.resolve(endpoint)];
+    if (!baseUri.path.contains('/v1/')) {
+      paths.add(baseUri.resolve('v1/$endpoint'));
+    }
+    return paths;
+  }
+
   Map<String, dynamic> _requestBody(AIProviderRequest request) {
-    if (protocol == ProviderProtocol.openaiCompatible) {
+    final messages = request.messages
+        .map((message) => {'role': message.role, 'content': message.text})
+        .toList(growable: false);
+    if (request.requestMode == AIRequestMode.responses) {
       return {
         'model': request.modelId,
-        'input': request.messages
-            .map((message) => {'role': message.role, 'content': message.text})
-            .toList(growable: false),
+        'input': messages,
         'temperature': request.temperature,
         'max_output_tokens': request.maxTokens,
         'stream': true,
@@ -386,16 +435,14 @@ class OfficialAIProviderClient implements AIProviderClient {
     }
     return {
       'model': request.modelId,
-      'messages': request.messages
-          .map((message) => {'role': message.role, 'content': message.text})
-          .toList(growable: false),
+      'messages': messages,
       'temperature': request.temperature,
       'max_tokens': request.maxTokens,
       'stream': true,
     };
   }
 
-  String? _extractDelta(_SseEvent event) {
+  String? _extractDelta(_SseEvent event, AIRequestMode mode) {
     if (event.data.isEmpty || event.data == '[DONE]') return null;
     final decoded = jsonDecode(event.data);
     if (decoded is! Map<String, dynamic>) return null;
@@ -412,22 +459,51 @@ class OfficialAIProviderClient implements AIProviderClient {
       );
     }
 
-    if (protocol == ProviderProtocol.openaiCompatible) {
-      if (type == 'response.output_text.delta') {
-        return decoded['delta'] as String?;
-      }
-      final delta = decoded['delta'];
-      if (delta is Map<String, dynamic>) {
-        return delta['text'] as String?;
-      }
-      return null;
+    switch (mode) {
+      case AIRequestMode.responses:
+        // OpenAI Responses API 事件格式
+        if (type == 'response.output_text.delta') {
+          return decoded['delta'] as String?;
+        }
+        return _extractChatCompletionsDelta(decoded);
+      case AIRequestMode.chatCompletions:
+        // OpenAI Chat Completions 流式格式：choices[0].delta.content
+        final delta = _extractChatCompletionsDelta(decoded);
+        if (delta != null) return delta;
+        // 部分网关直通 Responses 格式，兜底解析
+        if (type == 'response.output_text.delta') {
+          return decoded['delta'] as String?;
+        }
+        return null;
+      case AIRequestMode.anthropic:
+        if (type == 'content_block_delta') {
+          final delta = decoded['delta'];
+          if (delta is Map<String, dynamic> && delta['type'] == 'text_delta') {
+            return delta['text'] as String?;
+          }
+        }
+        return null;
     }
+  }
 
-    if (type == 'content_block_delta') {
-      final delta = decoded['delta'];
-      if (delta is Map<String, dynamic> && delta['type'] == 'text_delta') {
-        return delta['text'] as String?;
+  static String? _extractChatCompletionsDelta(Map<String, dynamic> decoded) {
+    final choices = decoded['choices'];
+    if (choices is List && choices.isNotEmpty) {
+      final choice = choices.first;
+      if (choice is Map<String, dynamic>) {
+        final delta = choice['delta'];
+        if (delta is Map<String, dynamic>) {
+          final content = delta['content'];
+          if (content is String && content.isNotEmpty) return content;
+          final text = delta['text'];
+          if (text is String && text.isNotEmpty) return text;
+        }
       }
+    }
+    // 其他供应商的兜底格式
+    final delta = decoded['delta'];
+    if (delta is Map<String, dynamic>) {
+      return delta['text'] as String?;
     }
     return null;
   }
@@ -745,8 +821,9 @@ class AIService extends ChangeNotifier {
         modelId: currentSession.modelId,
         temperature: settings.aiTemperature,
         maxTokens: settings.aiMaxTokens,
-        messages: _contextMessages(),
+        messages: _requestMessages(_contextMessages()),
         apiKey: apiKey,
+        requestMode: settings.aiRequestMode,
       );
 
       var lastNotification = DateTime.fromMillisecondsSinceEpoch(0);
@@ -876,8 +953,11 @@ class AIService extends ChangeNotifier {
         modelId: settings.aiModelId,
         temperature: settings.aiTemperature,
         maxTokens: settings.aiMaxTokens,
-        messages: [AIConversationMessage(role: 'user', text: normalizedPrompt)],
+        messages: _requestMessages([
+          AIConversationMessage(role: 'user', text: normalizedPrompt),
+        ]),
         apiKey: apiKey,
+        requestMode: settings.aiRequestMode,
       );
       await for (final delta in provider.sendMessageStream(request)) {
         if (_cancelledRequests.contains(requestId)) {
@@ -984,6 +1064,18 @@ class AIService extends ChangeNotifier {
       baseUri: Uri.parse(provider.baseUrl),
       protocol: provider.protocol,
     );
+  }
+
+  /// 组装发给供应商的消息：在会话/任务消息前插入自定义系统提示词
+  List<AIConversationMessage> _requestMessages(
+    List<AIConversationMessage> messages,
+  ) {
+    final systemPrompt = settings.aiSystemPrompt.trim();
+    if (systemPrompt.isEmpty) return messages;
+    return [
+      AIConversationMessage(role: 'system', text: systemPrompt),
+      ...messages,
+    ];
   }
 
   List<AIConversationMessage> _contextMessages() {

@@ -61,6 +61,63 @@ void main() {
     expect(provider.requests.single.messages.single.text, '用户请求');
   });
 
+  test('会话消息按设置中的请求方式传给供应商', () async {
+    await settings.saveApiKey(generatedCredential());
+    final provider = FakeAIProviderClient(chunks: const ['回复']);
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await settings.setAiRequestModeFor('openai', AIRequestMode.responses);
+    await service.startSession(workspacePath: workspace.path);
+
+    final result = await service.sendMessage('用户请求');
+    expect(result.reply, '回复');
+    expect(provider.requests.single.requestMode, AIRequestMode.responses);
+  });
+
+  test('自定义系统提示词作为 system 消息前置发送', () async {
+    await settings.saveApiKey(generatedCredential());
+    final provider = FakeAIProviderClient(chunks: const ['回复']);
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await settings.setAiSystemPrompt('你是代码助手，保持简洁');
+    await service.startSession(workspacePath: workspace.path);
+
+    final result = await service.sendMessage('用户请求');
+    expect(result.reply, '回复');
+    final request = provider.requests.single;
+    expect(request.messages, hasLength(2));
+    expect(request.messages.first.role, 'system');
+    expect(request.messages.first.text, '你是代码助手，保持简洁');
+    expect(request.messages.last.role, 'user');
+  });
+
+  test('系统提示词为空时不前置 system 消息', () async {
+    await settings.saveApiKey(generatedCredential());
+    final provider = FakeAIProviderClient(chunks: const ['回复']);
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+
+    await service.sendMessage('用户请求');
+    final request = provider.requests.single;
+    expect(request.messages.single.role, 'user');
+  });
+
   test('停止会话会取消进行中的请求且不会恢复旧会话', () async {
     await settings.saveApiKey(generatedCredential());
     final gate = Completer<void>();
@@ -207,11 +264,32 @@ void main() {
     );
   });
 
-  test('OpenAI 兼容协议使用自定义 Base API、Bearer 与 responses 请求体', () async {
+  test('OpenAI 兼容协议使用自定义 Base API、Bearer 与 chat/completions 请求体', () async {
     final response = StubHttpClientResponse(
       body:
-          'event: response.output_text.delta\n'
-          'data: ${jsonEncode({'type': 'response.output_text.delta', 'delta': '响应'})}\n\n',
+          'data: ${jsonEncode({
+            'id': 'chatcmpl-1',
+            'object': 'chat.completion.chunk',
+            'choices': [
+              {
+                'index': 0,
+                'delta': {'content': '响应'},
+                'finish_reason': null,
+              },
+            ],
+          })}\n\n'
+          'data: ${jsonEncode({
+            'id': 'chatcmpl-1',
+            'object': 'chat.completion.chunk',
+            'choices': [
+              {
+                'index': 0,
+                'delta': {'content': '完成'},
+                'finish_reason': null,
+              },
+            ],
+          })}\n\n'
+          'data: [DONE]\n\n',
     );
     final httpClient = RecordingHttpClient(responses: [response]);
     final client = OfficialAIProviderClient(
@@ -233,16 +311,17 @@ void main() {
             maxTokens: 2048,
             messages: const [AIConversationMessage(role: 'user', text: '请求内容')],
             apiKey: credential,
+            requestMode: AIRequestMode.chatCompletions,
           ),
         )
         .toList();
 
-    expect(chunks, ['响应']);
+    expect(chunks, ['响应', '完成']);
     final request = httpClient.requests.single;
     expect(request.method, 'POST');
     expect(
       request.uri,
-      Uri.parse('https://api.openai.com/v1/custom/responses'),
+      Uri.parse('https://api.openai.com/v1/custom/chat/completions'),
     );
     expect(
       request.recordedHeaders.value(HttpHeaders.authorizationHeader),
@@ -251,8 +330,302 @@ void main() {
     expect(request.recordedHeaders.value('x-api-key'), isNull);
     final body = jsonDecode(request.body.toString()) as Map<String, dynamic>;
     expect(body['model'], 'model-openai-compatible');
+    expect(body['max_tokens'], 2048);
+    expect(body['messages'], isA<List<dynamic>>());
+    expect(body['input'], isNull);
+  });
+
+  test('Responses API 请求方式使用 responses 端点与 input 请求体', () async {
+    final response = StubHttpClientResponse(
+      body:
+          'event: response.output_text.delta\n'
+          'data: ${jsonEncode({'type': 'response.output_text.delta', 'delta': '响应'})}\n\n'
+          'event: response.output_text.delta\n'
+          'data: ${jsonEncode({'type': 'response.output_text.delta', 'delta': '完成'})}\n\n',
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient(
+      id: 'custom-openai',
+      displayName: 'OpenAI 兼容供应商',
+      baseUri: Uri.parse('https://api.openai.com/v1/custom'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+    final credential = generatedCredential();
+
+    final chunks = await client
+        .sendMessageStream(
+          AIProviderRequest(
+            requestId: 'request-responses-mode',
+            modelId: 'model-responses-mode',
+            temperature: 0.4,
+            maxTokens: 2048,
+            messages: const [AIConversationMessage(role: 'user', text: '请求内容')],
+            apiKey: credential,
+            requestMode: AIRequestMode.responses,
+          ),
+        )
+        .toList();
+
+    expect(chunks, ['响应', '完成']);
+    final request = httpClient.requests.single;
+    expect(
+      request.uri,
+      Uri.parse('https://api.openai.com/v1/custom/responses'),
+    );
+    final body = jsonDecode(request.body.toString()) as Map<String, dynamic>;
     expect(body['max_output_tokens'], 2048);
     expect(body['input'], isA<List<dynamic>>());
+    expect(body['messages'], isNull);
+    expect(body['max_tokens'], isNull);
+  });
+
+  test('Responses API 主路径404时回退到v1/responses', () async {
+    final notFound = StubHttpClientResponse(statusCode: 404);
+    final success = StubHttpClientResponse(
+      body:
+          'event: response.output_text.delta\n'
+          'data: ${jsonEncode({'type': 'response.output_text.delta', 'delta': '回退成功'})}\n\n',
+    );
+    final httpClient = RecordingHttpClient(responses: [notFound, success]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://api.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final chunks = await client
+        .sendMessageStream(
+          AIProviderRequest(
+            requestId: 'request-responses-fallback',
+            modelId: 'model-a',
+            temperature: 0.7,
+            maxTokens: 1024,
+            messages: const [AIConversationMessage(role: 'user', text: 'hi')],
+            apiKey: 'key',
+            requestMode: AIRequestMode.responses,
+          ),
+        )
+        .toList();
+
+    expect(chunks, ['回退成功']);
+    expect(httpClient.requests, hasLength(2));
+    expect(
+      httpClient.requests[0].uri,
+      Uri.parse('https://api.example.com/responses'),
+    );
+    expect(
+      httpClient.requests[1].uri,
+      Uri.parse('https://api.example.com/v1/responses'),
+    );
+  });
+
+  test('OpenAI 兼容协议兼容 Responses API 事件格式的增量解析', () async {
+    final response = StubHttpClientResponse(
+      body:
+          'event: response.output_text.delta\n'
+          'data: ${jsonEncode({'type': 'response.output_text.delta', 'delta': '响应'})}\n\n',
+    );
+    final httpClient = RecordingHttpClient(responses: [response]);
+    final client = OfficialAIProviderClient(
+      id: 'custom-openai',
+      displayName: 'OpenAI 兼容供应商',
+      baseUri: Uri.parse('https://api.openai.com/v1/custom'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final chunks = await client
+        .sendMessageStream(
+          AIProviderRequest(
+            requestId: 'request-responses-format',
+            modelId: 'model-responses-format',
+            temperature: 0.4,
+            maxTokens: 2048,
+            messages: const [AIConversationMessage(role: 'user', text: '请求内容')],
+            apiKey: 'credential',
+            requestMode: AIRequestMode.chatCompletions,
+          ),
+        )
+        .toList();
+
+    expect(chunks, ['响应']);
+  });
+
+  test('聊天主路径404时回退到v1/chat/completions', () async {
+    final notFound = StubHttpClientResponse(statusCode: 404);
+    final success = StubHttpClientResponse(
+      body:
+          'data: ${jsonEncode({
+            'choices': [
+              {'index': 0, 'delta': {'content': '回退成功'}, 'finish_reason': null},
+            ],
+          })}\n\n'
+          'data: [DONE]\n\n',
+    );
+    final httpClient = RecordingHttpClient(responses: [notFound, success]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://api.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final chunks = await client
+        .sendMessageStream(
+          AIProviderRequest(
+            requestId: 'request-fallback-404',
+            modelId: 'model-a',
+            temperature: 0.7,
+            maxTokens: 1024,
+            messages: const [AIConversationMessage(role: 'user', text: 'hi')],
+            apiKey: 'key',
+            requestMode: AIRequestMode.chatCompletions,
+          ),
+        )
+        .toList();
+
+    expect(chunks, ['回退成功']);
+    expect(httpClient.requests, hasLength(2));
+    expect(
+      httpClient.requests[0].uri,
+      Uri.parse('https://api.example.com/chat/completions'),
+    );
+    expect(
+      httpClient.requests[1].uri,
+      Uri.parse('https://api.example.com/v1/chat/completions'),
+    );
+  });
+
+  test('聊天主路径返回网页时回退到v1/chat/completions并完成流式回复', () async {
+    final htmlPage = StubHttpClientResponse(
+      body: '<!doctype html><html><head><title>New API</title></head></html>',
+    );
+    final success = StubHttpClientResponse(
+      body:
+          'data: ${jsonEncode({
+            'choices': [
+              {'index': 0, 'delta': {'content': '正常回复'}, 'finish_reason': null},
+            ],
+          })}\n\n'
+          'data: [DONE]\n\n',
+    );
+    final httpClient = RecordingHttpClient(responses: [htmlPage, success]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://api.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final chunks = await client
+        .sendMessageStream(
+          AIProviderRequest(
+            requestId: 'request-fallback-html',
+            modelId: 'model-a',
+            temperature: 0.7,
+            maxTokens: 1024,
+            messages: const [AIConversationMessage(role: 'user', text: 'hi')],
+            apiKey: 'key',
+            requestMode: AIRequestMode.chatCompletions,
+          ),
+        )
+        .toList();
+
+    expect(chunks, ['正常回复']);
+    expect(httpClient.requests, hasLength(2));
+    expect(
+      httpClient.requests[1].uri,
+      Uri.parse('https://api.example.com/v1/chat/completions'),
+    );
+  });
+
+  test('聊天所有路径均返回网页时抛出可识别错误而非静默空回复', () async {
+    StubHttpClientResponse htmlPage() => StubHttpClientResponse(
+      body: '<!doctype html><html><head><title>Home</title></head></html>',
+    );
+    final httpClient = RecordingHttpClient(responses: [htmlPage(), htmlPage()]);
+    final client = OfficialAIProviderClient(
+      id: 'custom',
+      displayName: 'Custom',
+      baseUri: Uri.parse('https://www.example.com/'),
+      protocol: ProviderProtocol.openaiCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    await expectLater(
+      client
+          .sendMessageStream(
+            AIProviderRequest(
+              requestId: 'request-all-html',
+              modelId: 'model-a',
+              temperature: 0.7,
+              maxTokens: 1024,
+              messages: const [AIConversationMessage(role: 'user', text: 'hi')],
+              apiKey: 'key',
+            requestMode: AIRequestMode.chatCompletions,
+            ),
+          )
+          .toList(),
+      throwsCourierCode('INVALID_PROVIDER_RESPONSE'),
+    );
+    expect(httpClient.requests, hasLength(2));
+  });
+
+  test('Anthropic 兼容协议主路径404时回退到v1/messages', () async {
+    final notFound = StubHttpClientResponse(statusCode: 404);
+    final success = StubHttpClientResponse(
+      body:
+          'event: content_block_delta\n'
+          'data: ${jsonEncode({
+            'type': 'content_block_delta',
+            'delta': {'type': 'text_delta', 'text': '完成'},
+          })}\n\n',
+    );
+    final httpClient = RecordingHttpClient(responses: [notFound, success]);
+    final client = OfficialAIProviderClient(
+      id: 'custom-anthropic',
+      displayName: 'Anthropic 兼容供应商',
+      baseUri: Uri.parse('https://api.example.com/'),
+      protocol: ProviderProtocol.anthropicCompatible,
+      client: httpClient,
+    );
+    addTearDown(client.dispose);
+
+    final chunks = await client
+        .sendMessageStream(
+          AIProviderRequest(
+            requestId: 'request-anthropic-fallback',
+            modelId: 'model-anthropic',
+            temperature: 0.2,
+            maxTokens: 4096,
+            messages: const [AIConversationMessage(role: 'user', text: '请求内容')],
+            apiKey: 'key',
+            requestMode: AIRequestMode.anthropic,
+          ),
+        )
+        .toList();
+
+    expect(chunks, ['完成']);
+    expect(httpClient.requests, hasLength(2));
+    expect(
+      httpClient.requests[0].uri,
+      Uri.parse('https://api.example.com/messages'),
+    );
+    expect(
+      httpClient.requests[1].uri,
+      Uri.parse('https://api.example.com/v1/messages'),
+    );
   });
 
   test('Anthropic 兼容协议使用 x-api-key、messages 端点与请求体', () async {
@@ -284,6 +657,7 @@ void main() {
             maxTokens: 4096,
             messages: const [AIConversationMessage(role: 'user', text: '请求内容')],
             apiKey: credential,
+            requestMode: AIRequestMode.anthropic,
           ),
         )
         .toList();

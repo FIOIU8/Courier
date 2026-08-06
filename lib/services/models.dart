@@ -100,6 +100,19 @@ class AIModelOption {
 
 enum ProviderProtocol { openaiCompatible, anthropicCompatible }
 
+/// AI 请求方式：决定聊天端点、请求体与流式解析格式。
+/// 中转站通常同时支持 [responses] 与 [chatCompletions]。
+enum AIRequestMode {
+  /// OpenAI 官方标准 Chat Completions 接口（兼容性最广）
+  chatCompletions,
+
+  /// OpenAI Responses API（官方 OpenAI 与多数中转站支持）
+  responses,
+
+  /// Anthropic Messages API（x-api-key 认证）
+  anthropic,
+}
+
 class CustomAIProvider {
   static final RegExp idPattern = RegExp(r'^[a-z][a-z0-9_-]{1,31}$');
   static final RegExp _controlCharacters = RegExp(r'[\x00-\x1f\x7f]');

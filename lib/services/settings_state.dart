@@ -20,6 +20,7 @@ class SettingsState extends ChangeNotifier {
   static const int minAiMaxTokens = 256;
   static const int standardAiMaxTokens = 131072;
   static const int millionContextAiMaxTokens = 1000000;
+  static const int maxSystemPromptLength = 4000;
   static const int _maxCustomProviders = 50;
   static const String _customProvidersKey = 'custom_ai_providers';
   static final Random _secureRandom = Random.secure();
@@ -56,6 +57,10 @@ class SettingsState extends ChangeNotifier {
   int _aiMaxTokens = 4096;
   String _aiProviderId = 'openai';
   String _aiModelId = '';
+  String _aiSystemPrompt = '';
+
+  /// 每个供应商单独保存的请求方式；未保存时按供应商协议取默认值
+  final Map<String, AIRequestMode> _aiRequestModes = {};
   bool _apiKeyConfigured = false;
   List<CustomAIProvider> _customProviders = const [];
   int _editorFontSize = 14;
@@ -86,6 +91,21 @@ class SettingsState extends ChangeNotifier {
   int get aiMaxTokens => _aiMaxTokens;
   String get aiProviderId => _aiProviderId;
   String get aiModelId => _aiModelId;
+
+  /// 当前供应商的请求方式（供应商未单独设置时按协议取默认值）
+  AIRequestMode get aiRequestMode => aiRequestModeFor(_aiProviderId);
+
+  /// 指定供应商的请求方式（未单独设置时按协议取默认值）
+  AIRequestMode aiRequestModeFor(String providerId) =>
+      _aiRequestModes[providerId] ?? _defaultRequestModeFor(providerId);
+
+  /// 当前供应商支持的请求方式（openai 兼容 → Chat Completions/Responses；
+  /// anthropic 兼容 → Anthropic API）
+  List<AIRequestMode> get aiRequestModes =>
+      _compatibleRequestModes(_aiProviderId);
+
+  String get aiSystemPrompt => _aiSystemPrompt;
+
   bool get apiKeyConfigured => _apiKeyConfigured;
   List<CustomAIProvider> get customProviders =>
       List<CustomAIProvider>.unmodifiable(_customProviders);
@@ -155,6 +175,12 @@ class SettingsState extends ChangeNotifier {
       environmentModel ?? storedModel ?? '',
       fallbackToEmpty: true,
     );
+    _aiSystemPrompt = _readSystemPrompt(
+      preferences.getString('ai_system_prompt'),
+    );
+    _aiRequestModes
+      ..clear()
+      ..addAll(_readRequestModes(preferences.getString('ai_request_modes')));
 
     _editorFontSize = _boundedInt(
       preferences.getInt('editor_font_size') ?? 14,
@@ -243,6 +269,43 @@ class SettingsState extends ChangeNotifier {
     _aiProviderId = provider;
     _aiMaxTokens = maxTokens;
     _apiKeyConfigured = apiKeyConfigured;
+    notifyListeners();
+  }
+
+  /// 保存某个供应商的请求方式；不兼容的值被拒绝
+  Future<void> setAiRequestModeFor(
+    String providerId,
+    AIRequestMode value,
+  ) async {
+    final normalized = _validatedProvider(providerId);
+    if (!_compatibleRequestModes(normalized).contains(value)) {
+      throw const CourierException('INVALID_SETTING', '当前供应商不支持该请求方式');
+    }
+    final next = Map<String, AIRequestMode>.of(_aiRequestModes);
+    final previous = next[normalized];
+    if (previous == value) return;
+    next[normalized] = value;
+    await _persist(
+      (preferences) => preferences.setString(
+        'ai_request_modes',
+        jsonEncode(
+          next.map((id, mode) => MapEntry(id, mode.name)),
+        ),
+      ),
+    );
+    _aiRequestModes
+      ..clear()
+      ..addAll(next);
+    notifyListeners();
+  }
+
+  Future<void> setAiSystemPrompt(String value) async {
+    final prompt = _readSystemPrompt(value);
+    if (prompt == _aiSystemPrompt) return;
+    await _persist(
+      (preferences) => preferences.setString('ai_system_prompt', prompt),
+    );
+    _aiSystemPrompt = prompt;
     notifyListeners();
   }
 
@@ -335,6 +398,8 @@ class SettingsState extends ChangeNotifier {
         : _apiKeyConfigured;
     final existingCredential = await secureStorage.readApiKey(providerId);
     await secureStorage.deleteApiKey(providerId);
+    final nextRequestModes = Map<String, AIRequestMode>.of(_aiRequestModes)
+      ..remove(providerId);
 
     try {
       await _persist((preferences) async {
@@ -351,6 +416,18 @@ class SettingsState extends ChangeNotifier {
           if (!await preferences.setString('ai_provider', 'openai')) {
             return false;
           }
+        }
+        final requestModesChanged =
+            nextRequestModes.length != _aiRequestModes.length;
+        if (requestModesChanged &&
+            !await preferences.setString(
+              'ai_request_modes',
+              jsonEncode(
+                nextRequestModes
+                    .map((id, mode) => MapEntry(id, mode.name)),
+              ),
+            )) {
+          return false;
         }
         return preferences.setString(
           _customProvidersKey,
@@ -372,6 +449,9 @@ class SettingsState extends ChangeNotifier {
     }
 
     _customProviders = List<CustomAIProvider>.unmodifiable(updated);
+    _aiRequestModes
+      ..clear()
+      ..addAll(nextRequestModes);
     if (deletingCurrent) {
       _aiProviderId = 'openai';
       _aiModelId = '';
@@ -535,6 +615,59 @@ class SettingsState extends ChangeNotifier {
     }
     return provider;
   }
+
+  /// 读取按供应商保存的请求方式；未知值或与协议不兼容的条目被丢弃
+  Map<String, AIRequestMode> _readRequestModes(String? stored) {
+    if (stored == null || stored.trim().isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(stored);
+      if (decoded is! Map) return const {};
+      final modes = <String, AIRequestMode>{};
+      for (final entry in decoded.entries) {
+        if (entry.key is! String || entry.value is! String) continue;
+        final parsed = AIRequestMode.values
+            .where((mode) => mode.name == entry.value)
+            .firstOrNull;
+        if (parsed == null) continue;
+        final providerId = entry.key as String;
+        if (!CustomAIProvider.idPattern.hasMatch(providerId) ||
+            !_compatibleRequestModes(providerId).contains(parsed)) {
+          continue;
+        }
+        modes[providerId] = parsed;
+      }
+      return modes;
+    } on FormatException {
+      return const {};
+    }
+  }
+
+  /// 读取系统提示词：去除控制字符（保留换行/制表）并限制长度
+  static String _readSystemPrompt(String? value) {
+    final prompt = (value ?? '')
+        .replaceAll(RegExp(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'), '');
+    return prompt.length > maxSystemPromptLength
+        ? prompt.substring(0, maxSystemPromptLength)
+        : prompt;
+  }
+
+  /// 供应商协议允许的请求方式（openai 兼容 → Chat Completions/Responses；
+  /// anthropic 兼容 → Anthropic API）
+  List<AIRequestMode> _compatibleRequestModes(String providerId) {
+    final custom = _customProviders
+        .where((provider) => provider.id == providerId)
+        .firstOrNull;
+    final protocol = custom?.protocol ??
+        (providerId == 'anthropic'
+            ? ProviderProtocol.anthropicCompatible
+            : ProviderProtocol.openaiCompatible);
+    return protocol == ProviderProtocol.anthropicCompatible
+        ? const [AIRequestMode.anthropic]
+        : const [AIRequestMode.chatCompletions, AIRequestMode.responses];
+  }
+
+  AIRequestMode _defaultRequestModeFor(String providerId) =>
+      _compatibleRequestModes(providerId).first;
 
   static String _validatedModel(String value, {bool fallbackToEmpty = false}) {
     final model = value.trim();

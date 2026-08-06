@@ -712,23 +712,15 @@ class _Background extends StatefulWidget {
 }
 
 class _BackgroundState extends State<_Background> {
-  /// 启动时检测到背景图片文件缺失：回退纯色并提示一次
-  bool _imageMissing = false;
+  /// 已处理过的背景图片路径（用于检测路径变化）
+  String _lastPath = '';
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_verifyBackgroundImage());
-    });
-  }
+  /// 当前背景图片文件缺失：回退纯色并提示一次
+  bool _imageMissing = false;
 
   /// 背景图片文件不存在时回退纯色、提示并清除已持久化的路径；
   /// 图片在运行中被删除则由 Image.errorBuilder 兜底，不崩溃。
-  Future<void> _verifyBackgroundImage() async {
-    final settings = context.read<SettingsState>();
-    final path = settings.backgroundImagePath;
-    if (path.isEmpty || _imageMissing) return;
+  Future<void> _verifyBackgroundImage(String path) async {
     var exists = false;
     try {
       exists = await File(path).exists();
@@ -741,61 +733,62 @@ class _BackgroundState extends State<_Background> {
         const SnackBar(content: Text('背景图片不存在，已恢复默认背景')),
       );
       try {
-        await settings.setBackgroundImagePath('');
+        await context.read<SettingsState>().setBackgroundImagePath('');
       } catch (_) {
-        // 清理失败不影响界面，下次启动会再次检测
+        // 清理失败不影响界面，下次路径变化会再次检测
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<SettingsState>(
-      builder: (context, settings, _) {
-        // 启动时图片缺失回退后，用户重新设置了背景图片：
-        // 恢复图片渲染并重新校验新路径。
-        if (_imageMissing && settings.backgroundImagePath.isNotEmpty) {
-          _imageMissing = false;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            unawaited(_verifyBackgroundImage());
-          });
-        }
-        final isVscode = settings.uiStyle == AppUiStyle.vscode;
-        final solidColor = isVscode
-            ? VscodePalette.background
-            : const Color(0xFF101216);
-        final path = settings.backgroundImagePath;
-        if (path.isEmpty || _imageMissing) {
-          return DecoratedBox(
-            decoration: BoxDecoration(color: solidColor),
-          );
-        }
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            // 背景图：按透明度显示（gaplessPlayback 避免透明度变化时的闪烁）
-            Opacity(
-              opacity: settings.backgroundOpacity,
-              child: Image.file(
-                File(path),
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                errorBuilder: (_, _, _) => DecoratedBox(
-                  decoration: BoxDecoration(color: solidColor),
-                ),
-              ),
+    final settings = context.watch<SettingsState>();
+    final path = settings.backgroundImagePath;
+    // 路径变化（含启动首次）：重置缺失标记，并对非空路径做存在性校验，
+    // 覆盖启动缺失回退后重新选图、点击"最近使用"等场景。
+    if (path != _lastPath) {
+      _lastPath = path;
+      _imageMissing = false;
+      if (path.isNotEmpty) {
+        final nextPath = path;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(_verifyBackgroundImage(nextPath));
+        });
+      }
+    }
+    final isVscode = settings.uiStyle == AppUiStyle.vscode;
+    final solidColor = isVscode
+        ? VscodePalette.background
+        : const Color(0xFF101216);
+    if (path.isEmpty || _imageMissing) {
+      return DecoratedBox(
+        decoration: BoxDecoration(color: solidColor),
+      );
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 背景图：按透明度显示（gaplessPlayback 避免透明度变化时的闪烁）
+        Opacity(
+          opacity: settings.backgroundOpacity,
+          child: Image.file(
+            File(path),
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => DecoratedBox(
+              decoration: BoxDecoration(color: solidColor),
             ),
-            // 深色半透明遮罩，保证前景可读
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: isVscode
-                    ? const Color(0xF21E1E1E)
-                    : const Color(0xCC0C1220),
-              ),
-            ),
-          ],
-        );
-      },
+          ),
+        ),
+        // 深色半透明遮罩，保证前景可读
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: isVscode
+                ? const Color(0xF21E1E1E)
+                : const Color(0xCC0C1220),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -44,11 +44,6 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 区块切换滑动方向：1 = 新区块从右滑入；-1 = 从左滑入
   int _sectionSlideDirection = 1;
 
-  /// 模糊强度拖动中的临时值（null = 未在拖动）
-  double? _dragBlurSigma;
-
-  /// 背景图片透明度拖动中的临时值（null = 未在拖动）
-  double? _dragBackgroundOpacity;
   bool _savingProvider = false;
   String? _error;
   bool _errorCopied = false;
@@ -972,94 +967,9 @@ class _SettingsPageState extends State<SettingsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ---- UI 样式（置顶，主题切换即时生效）----
         const Padding(
-          padding: EdgeInsets.only(top: 8, bottom: 12),
-          child: Text(
-            '强调色',
-            style: TextStyle(fontSize: 13, color: Colors.white70),
-          ),
-        ),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (var index = 0; index < palette.length; index++)
-              _accentSwatch(
-                color: palette[index],
-                name: SettingsState.accentPaletteNames[index],
-                selected: current.toARGB32() == palette[index].toARGB32(),
-                onTap: () => unawaited(
-                  _applySetting(() => settings.setAccentColor(palette[index])),
-                ),
-              ),
-          ],
-        ),
-        const Padding(
-          padding: EdgeInsets.only(top: 18, bottom: 4),
-          child: Text(
-            '主题色将应用到全界面强调元素（按钮、选中态、图标等）',
-            style: TextStyle(fontSize: 11, color: Colors.white38),
-          ),
-        ),
-        const SizedBox(height: 10),
-        _switchRow(
-          label: '毛玻璃模糊',
-          value: settings.glassEnabled,
-          onChanged: (value) =>
-              unawaited(_applySetting(() => settings.setGlassEnabled(value))),
-        ),
-        // 模糊强度：拖动过程仅改内存（本地预览），松手时一次性持久化，
-        // 避免每帧写入 SharedPreferences 并触发全树 BackdropFilter 重建。
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const SizedBox(
-                width: 150,
-                child: Text(
-                  '模糊强度',
-                  style: TextStyle(fontSize: 13, color: Colors.white70),
-                ),
-              ),
-              Expanded(
-                child: Slider(
-                  value: (_dragBlurSigma ?? settings.blurSigma).clamp(0, 30),
-                  min: 0,
-                  max: 30,
-                  divisions: 30,
-                  onChanged: (value) => setState(() => _dragBlurSigma = value),
-                  onChangeEnd: (value) {
-                    unawaited(
-                      _applySetting(() async {
-                        await settings.setBlurSigma(value);
-                        if (mounted) setState(() => _dragBlurSigma = null);
-                      }),
-                    );
-                  },
-                ),
-              ),
-              SizedBox(
-                width: 80,
-                child: Text(
-                  '${(_dragBlurSigma ?? settings.blurSigma).round()}',
-                  textAlign: TextAlign.right,
-                  style: TextStyle(fontSize: 12, color: accentLightOf(context)),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Padding(
-          padding: EdgeInsets.only(top: 18, bottom: 10),
-          child: Text(
-            '背景图片',
-            style: TextStyle(fontSize: 13, color: Colors.white70),
-          ),
-        ),
-        _buildBackgroundImageSettings(settings),
-        const Padding(
-          padding: EdgeInsets.only(top: 18, bottom: 10),
+          padding: EdgeInsets.only(top: 8, bottom: 10),
           child: Text(
             'UI 样式',
             style: TextStyle(fontSize: 13, color: Colors.white70),
@@ -1091,29 +1001,117 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
         const Padding(
-          padding: EdgeInsets.only(top: 6),
+          padding: EdgeInsets.only(top: 6, bottom: 18),
           child: Text(
-            'UI 样式切换后立即生效，无需重启',
+            '切换后立即生效，无需重启',
             style: TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+        ),
+        // ---- 强调色 ----
+        const Padding(
+          padding: EdgeInsets.only(bottom: 12),
+          child: Text(
+            '强调色',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+        ),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (var index = 0; index < palette.length; index++)
+              _accentSwatch(
+                color: palette[index],
+                name: SettingsState.accentPaletteNames[index],
+                selected: current.toARGB32() == palette[index].toARGB32(),
+                onTap: () => unawaited(
+                  _applySetting(() => settings.setAccentColor(palette[index])),
+                ),
+              ),
+          ],
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 14, bottom: 4),
+          child: Text(
+            '主题色将应用到全界面强调元素（按钮、选中态、图标等）',
+            style: TextStyle(fontSize: 11, color: Colors.white38),
+          ),
+        ),
+        // ---- 背景图片 ----
+        const Padding(
+          padding: EdgeInsets.only(top: 18, bottom: 10),
+          child: Text(
+            '背景图片',
+            style: TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+        ),
+        _buildBackgroundImageSettings(settings),
+        // ---- 毛玻璃 ----
+        const SizedBox(height: 10),
+        _switchRow(
+          label: '毛玻璃模糊',
+          value: settings.glassEnabled,
+          onChanged: (value) =>
+              unawaited(_applySetting(() => settings.setGlassEnabled(value))),
+        ),
+        // 模糊强度：拖动过程实时更新内存并渲染（persist: false 不写盘），
+        // 松手时一次性持久化。
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 150,
+                child: Text(
+                  '模糊强度',
+                  style: TextStyle(fontSize: 13, color: Colors.white70),
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  key: const ValueKey('blur-sigma-slider'),
+                  value: settings.blurSigma.clamp(0, 30),
+                  min: 0,
+                  max: 30,
+                  divisions: 30,
+                  onChanged: (value) => unawaited(
+                    _applySetting(
+                      () => settings.setBlurSigma(value, persist: false),
+                    ),
+                  ),
+                  onChangeEnd: (value) => unawaited(
+                    _applySetting(() => settings.setBlurSigma(value)),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 80,
+                child: Text(
+                  '${settings.blurSigma.round()}',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 12, color: accentLightOf(context)),
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
 
-  /// 背景图片配置：实时预览 + 选择/清除 + 透明度滑杆。
-  /// 透明度拖动过程仅本地预览（不写盘），松手时一次性持久化，
-  /// 与模糊强度交互一致，避免拖动期间每帧写入 SharedPreferences。
+  /// 背景图片配置：实时预览 + 选择/清除 + 透明度滑杆 + 最近使用。
+  /// 透明度拖动过程实时更新内存并渲染（persist: false 不写盘），松手时持久化。
   Widget _buildBackgroundImageSettings(SettingsState settings) {
     final path = settings.backgroundImagePath;
-    final opacity = _dragBackgroundOpacity ?? settings.backgroundOpacity;
+    final history = settings.backgroundImageHistory;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildBackgroundPreview(settings, opacity),
+            _buildBackgroundPreview(settings),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -1166,31 +1164,32 @@ class _SettingsPageState extends State<SettingsPage> {
               Expanded(
                 child: Slider(
                   key: const ValueKey('background-opacity-slider'),
-                  value: opacity.clamp(0.0, 1.0),
+                  value: settings.backgroundOpacity.clamp(0.0, 1.0),
                   max: 1,
                   divisions: 20,
                   onChanged: path.isEmpty
                       ? null
-                      : (value) =>
-                            setState(() => _dragBackgroundOpacity = value),
+                      : (value) => unawaited(
+                            _applySetting(
+                              () => settings.setBackgroundOpacity(
+                                value,
+                                persist: false,
+                              ),
+                            ),
+                          ),
                   onChangeEnd: path.isEmpty
                       ? null
-                      : (value) {
-                          unawaited(
-                            _applySetting(() async {
-                              await settings.setBackgroundOpacity(value);
-                              if (mounted) {
-                                setState(() => _dragBackgroundOpacity = null);
-                              }
-                            }),
-                          );
-                        },
+                      : (value) => unawaited(
+                            _applySetting(
+                              () => settings.setBackgroundOpacity(value),
+                            ),
+                          ),
                 ),
               ),
               SizedBox(
                 width: 80,
                 child: Text(
-                  '${(opacity * 100).round()}%',
+                  '${(settings.backgroundOpacity * 100).round()}%',
                   textAlign: TextAlign.right,
                   style: TextStyle(fontSize: 12, color: accentLightOf(context)),
                 ),
@@ -1198,13 +1197,30 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        if (history.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.only(top: 14, bottom: 8),
+            child: Text(
+              '最近使用',
+              style: TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final entry in history)
+                _recentThumbnail(entry, selected: entry == path),
+            ],
+          ),
+        ],
       ],
     );
   }
 
   /// 背景效果实时预览（图片 + 透明度 + 遮罩），无图片时显示纯色占位。
-  /// 拖动透明度滑杆时用临时值刷新，所见即所得。
-  Widget _buildBackgroundPreview(SettingsState settings, double opacity) {
+  /// 透明度随滑杆实时更新，所见即所得。
+  Widget _buildBackgroundPreview(SettingsState settings) {
     final isVscode = settings.uiStyle == AppUiStyle.vscode;
     final solidColor = isVscode
         ? VscodePalette.background
@@ -1238,7 +1254,7 @@ class _SettingsPageState extends State<SettingsPage> {
               fit: StackFit.expand,
               children: [
                 Opacity(
-                  opacity: opacity,
+                  opacity: settings.backgroundOpacity,
                   child: Image.file(
                     File(path),
                     fit: BoxFit.cover,
@@ -1253,6 +1269,52 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
+    );
+  }
+
+  /// "最近使用"缩略图：点击一键应用为当前背景，选中项高亮描边。
+  Widget _recentThumbnail(String path, {required bool selected}) {
+    final accent = accentLightOf(context);
+    return Tooltip(
+      message: path,
+      child: InkWell(
+        key: ValueKey('bg-recent-$path'),
+        onTap: () => unawaited(_applyHistoryImage(path)),
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          width: 64,
+          height: 40,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: selected ? accent : glassBorderOf(context),
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Image.file(
+            File(path),
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => Container(
+              color: const Color(0xFF2D2D2D),
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.broken_image_outlined,
+                size: 16,
+                color: Colors.white24,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 应用历史背景图片路径；文件缺失时由背景层兜底回退并提示。
+  Future<void> _applyHistoryImage(String path) {
+    return _applySetting(
+      () => context.read<SettingsState>().setBackgroundImagePath(path),
     );
   }
 
@@ -1278,7 +1340,6 @@ class _SettingsPageState extends State<SettingsPage> {
     await _applySetting(
       () => context.read<SettingsState>().setBackgroundImagePath(''),
     );
-    if (mounted) setState(() => _dragBackgroundOpacity = null);
   }
 
   Widget _accentSwatch({

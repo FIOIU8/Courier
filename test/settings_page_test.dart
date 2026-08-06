@@ -200,12 +200,13 @@ void main() {
     expect(find.text('无背景图'), findsOneWidget);
     expect(find.text('选择图片…'), findsOneWidget);
     expect(find.text('清除'), findsNothing);
+    expect(find.text('最近使用'), findsNothing);
     var slider = tester.widget<Slider>(
       find.byKey(const ValueKey('background-opacity-slider')),
     );
     expect(slider.onChanged, isNull, reason: '未设置背景图片时透明度滑杆应禁用');
 
-    // UI 样式切换即时生效并持久化
+    // UI 样式切换即时生效并持久化（SegmentedButton 置顶可见）
     await tester.tap(find.text('VSCode 风格'));
     await tester.pumpAndSettle();
     expect(settings.uiStyle, AppUiStyle.vscode);
@@ -215,7 +216,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(settings.uiStyle, AppUiStyle.material3);
 
-    // 设置背景图片后：滑杆可用，拖动松手一次性持久化
+    // 设置背景图片后：滑杆可用，拖动实时更新内存、松手持久化
     await settings.setBackgroundImagePath(imageFile.path);
     await tester.pump();
     expect(find.text('清除'), findsOneWidget);
@@ -224,31 +225,43 @@ void main() {
       findsOneWidget,
       reason: '应显示当前背景图片路径',
     );
+    expect(find.text('最近使用'), findsOneWidget, reason: '应显示最近使用历史');
 
     slider = tester.widget<Slider>(
       find.byKey(const ValueKey('background-opacity-slider')),
     );
     expect(slider.onChanged, isNotNull, reason: '设置背景图片后透明度滑杆应可用');
 
+    // 拖动过程中（未松手）透明度内存值已更新但未写盘
     final opacityBefore = settings.backgroundOpacity;
-    await tester.drag(
-      find.byKey(const ValueKey('background-opacity-slider')),
-      const Offset(80, 0),
+    final gesture = await tester.startGesture(
+      tester.getCenter(
+        find.byKey(const ValueKey('background-opacity-slider')),
+      ),
     );
-    await tester.pumpAndSettle();
+    await gesture.moveBy(const Offset(-60, 0));
+    await tester.pump();
     expect(
       settings.backgroundOpacity,
       isNot(opacityBefore),
-      reason: '拖动松手后透明度应更新',
+      reason: '拖动过程应实时更新透明度内存值',
     );
     prefs = await SharedPreferences.getInstance();
     expect(
       prefs.getDouble('theme_background_opacity'),
+      isNot(settings.backgroundOpacity),
+      reason: '拖动过程不应写盘',
+    );
+    await gesture.up();
+    await tester.pumpAndSettle();
+    prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getDouble('theme_background_opacity'),
       settings.backgroundOpacity,
-      reason: '透明度应在松手时持久化',
+      reason: '松手应持久化',
     );
 
-    // 清除背景图片：路径清空、滑杆恢复禁用、拖动状态复位
+    // 清除背景图片：路径清空、滑杆禁用，历史仍在
     await tester.tap(find.text('清除'));
     await tester.pumpAndSettle();
     expect(settings.backgroundImagePath, isEmpty);
@@ -257,6 +270,99 @@ void main() {
       find.byKey(const ValueKey('background-opacity-slider')),
     );
     expect(slider.onChanged, isNull);
+
+    // 点击"最近使用"缩略图一键复用
+    await tester.tap(find.byKey(ValueKey('bg-recent-${imageFile.path}')));
+    await tester.pumpAndSettle();
+    expect(
+      settings.backgroundImagePath,
+      imageFile.path,
+      reason: '点击最近使用应重新应用该背景图片',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('外观区块：模糊强度拖动实时渲染、松手持久化', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: _MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    final logger = AppLogger();
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    final workspace = WorkspaceService(
+      fileSystem: SafeFileSystem(),
+      configService: WorkspaceConfigService(logger: logger),
+      logger: logger,
+    );
+    addTearDown(() {
+      workspace.dispose();
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(1024, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+          ChangeNotifierProvider<WorkspaceService>.value(value: workspace),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('外观').first);
+    await tester.pumpAndSettle();
+
+    // 滚动到模糊强度滑杆并拖动：拖动中内存值实时更新且未写盘
+    final blurSliderFinder = find.byKey(const ValueKey('blur-sigma-slider'));
+    await tester.ensureVisible(blurSliderFinder);
+    await tester.pumpAndSettle();
+
+    final blurBefore = settings.blurSigma;
+    final gesture = await tester.startGesture(
+      tester.getCenter(blurSliderFinder),
+    );
+    await gesture.moveBy(const Offset(-80, 0));
+    await tester.pump();
+    expect(
+      settings.blurSigma,
+      isNot(blurBefore),
+      reason: '拖动过程应实时更新模糊强度',
+    );
+    var prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getDouble('blur_sigma'),
+      isNot(settings.blurSigma),
+      reason: '拖动过程不应写盘',
+    );
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getDouble('blur_sigma'),
+      settings.blurSigma,
+      reason: '松手应持久化',
+    );
     expect(tester.takeException(), isNull);
   });
 

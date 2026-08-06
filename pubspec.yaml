@@ -17,7 +17,6 @@ dependencies:
   shared_preferences: ^2.3.2
   simple_secure_storage: ^0.4.2
   package_info_plus: ^10.2.1
-  flutter_markdown_plus: ^1.0.12
   crypto: ^3.0.7
 
 dev_dependencies:

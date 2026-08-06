@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../services/courier_service.dart';
@@ -181,7 +180,7 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
             onPressed: settings.aiConfigurationReady && !_sessionStarting
                 ? _initializeSession
                 : null,
-            icon: const Icon(Icons.refresh, size: 15),
+            icon: const Icon(Icons.add, size: 16),
           ),
         ],
       ),
@@ -284,15 +283,28 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
               maxLines: 4,
               maxLength: 32000,
               style: const TextStyle(fontSize: 13, color: Colors.white70),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
                 counterText: '',
                 hintText: '消息',
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
+                filled: true,
+                fillColor: const Color(0x14FFFFFF),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
                 ),
-                border: OutlineInputBorder(),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: kGlassBorder),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: kGlassBorder),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide(color: accentColorOf(context)),
+                ),
               ),
               onSubmitted: (_) => _sendMessage(),
             ),
@@ -383,26 +395,14 @@ class _MessageBubble extends StatelessWidget {
                         style: const TextStyle(fontSize: 13, height: 1.45),
                       )
                     else
-                      MarkdownBody(
-                        data: message.text.isEmpty ? ' ' : message.text,
-                        selectable: true,
-                        styleSheet: MarkdownStyleSheet(
-                          p: const TextStyle(
-                            fontSize: 13,
-                            height: 1.5,
-                            color: Colors.white70,
-                          ),
-                          code: const TextStyle(
-                            fontSize: 12,
-                            height: 1.45,
-                            fontFamily: 'Consolas',
-                            color: Color(0xFFE5E7EB),
-                          ),
-                          codeblockDecoration: BoxDecoration(
-                            color: const Color(0xFF111317),
-                            borderRadius: BorderRadius.circular(kRadiusSm),
-                            border: Border.all(color: kGlassBorder),
-                          ),
+                      // 统一用单个可选文本控件渲染（不做 Markdown 解析）：
+                      // Markdown 分块渲染会把文本拆成多个控件，导致无法整段连续复制
+                      SelectableText(
+                        message.text.isEmpty ? ' ' : message.text,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          height: 1.5,
+                          color: Colors.white70,
                         ),
                       ),
                     if (!isUser && message.text.isNotEmpty)

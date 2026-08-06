@@ -100,6 +100,15 @@ class AIModelOption {
 
 enum ProviderProtocol { openaiCompatible, anthropicCompatible }
 
+/// 应用 UI 样式（外观主题）。
+enum AppUiStyle {
+  /// Material 3 玻璃拟态风格（默认）
+  material3,
+
+  /// VSCode 暗色扁平风格
+  vscode,
+}
+
 /// AI 请求方式：决定聊天端点、请求体与流式解析格式。
 /// 中转站通常同时支持 [responses] 与 [chatCompletions]。
 enum AIRequestMode {

@@ -29,6 +29,12 @@ class SettingsState extends ChangeNotifier {
   static const String _aiModelIdsKey = 'ai_model_ids';
   static final Random _secureRandom = Random.secure();
 
+  /// 背景图片路径最大长度
+  static const int maxBackgroundImagePathLength = 1024;
+
+  /// 背景图片默认透明度
+  static const double defaultBackgroundOpacity = 0.35;
+
   /// 默认强调色（teal，对齐原项目主色调）
   static const int defaultAccentColorValue = 0xFF23B8A4;
 
@@ -83,6 +89,15 @@ class SettingsState extends ChangeNotifier {
 
   /// 毛玻璃模糊强度（0 = 无模糊）
   double _blurSigma = 14;
+
+  /// 背景图片路径（空字符串 = 无背景图）
+  String _backgroundImagePath = '';
+
+  /// 背景图片透明度（0.0–1.0）
+  double _backgroundOpacity = defaultBackgroundOpacity;
+
+  /// UI 样式（Material 3 / VSCode）
+  AppUiStyle _uiStyle = AppUiStyle.material3;
   bool _loaded = false;
 
   SettingsState({
@@ -132,6 +147,15 @@ class SettingsState extends ChangeNotifier {
 
   /// 毛玻璃模糊强度（0~30）
   double get blurSigma => _blurSigma;
+
+  /// 背景图片路径（空字符串 = 无背景图）
+  String get backgroundImagePath => _backgroundImagePath;
+
+  /// 背景图片透明度（0.0–1.0）
+  double get backgroundOpacity => _backgroundOpacity;
+
+  /// UI 样式（Material 3 / VSCode）
+  AppUiStyle get uiStyle => _uiStyle;
 
   /// 当前强调色（自定义主题）
   Color get accentColor => Color(_accentColorValue);
@@ -249,6 +273,16 @@ class SettingsState extends ChangeNotifier {
       0.0,
       30.0,
     );
+    _backgroundImagePath = _readBackgroundImagePath(
+      preferences.getString('theme_background_image'),
+    );
+    _backgroundOpacity = _boundedDouble(
+      preferences.getDouble('theme_background_opacity') ??
+          defaultBackgroundOpacity,
+      0.0,
+      1.0,
+    );
+    _uiStyle = _parseUiStyle(preferences.getString('theme_ui_style'));
     _apiKeyConfigured = await secureStorage.hasApiKey(_aiProviderId);
     _loaded = true;
     notifyListeners();
@@ -681,6 +715,41 @@ class SettingsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置背景图片路径；空字符串清除背景图。
+  /// 非法路径（超长或含控制字符）按空值处理。
+  Future<void> setBackgroundImagePath(String value) async {
+    final path = _readBackgroundImagePath(value);
+    if (path == _backgroundImagePath) return;
+    await _persist(
+      (preferences) => preferences.setString('theme_background_image', path),
+    );
+    _backgroundImagePath = path;
+    notifyListeners();
+  }
+
+  /// 设置背景图片透明度（0.0–1.0）
+  Future<void> setBackgroundOpacity(double value) async {
+    if (!value.isFinite || value < 0.0 || value > 1.0) {
+      throw const CourierException('INVALID_SETTING', '背景图片透明度必须位于 0.0 到 1.0');
+    }
+    if (value == _backgroundOpacity) return;
+    await _persist(
+      (preferences) => preferences.setDouble('theme_background_opacity', value),
+    );
+    _backgroundOpacity = value;
+    notifyListeners();
+  }
+
+  /// 设置 UI 样式（Material 3 / VSCode）
+  Future<void> setUiStyle(AppUiStyle value) async {
+    if (value == _uiStyle) return;
+    await _persist(
+      (preferences) => preferences.setString('theme_ui_style', value.name),
+    );
+    _uiStyle = value;
+    notifyListeners();
+  }
+
   Future<void> flush() => _writeChain;
 
   Future<void> _persist(
@@ -912,6 +981,25 @@ class SettingsState extends ChangeNotifier {
     return AppLogLevel.values.firstWhere(
       (level) => level.name == value.trim().toLowerCase(),
       orElse: () => AppLogLevel.info,
+    );
+  }
+
+  /// 读取背景图片路径：去首尾空白，拒绝超长或含控制字符的值（回退为空 = 无背景图）
+  static String _readBackgroundImagePath(String? value) {
+    final path = (value ?? '').trim();
+    if (path.isEmpty) return '';
+    if (path.length > maxBackgroundImagePathLength ||
+        path.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
+      return '';
+    }
+    return path;
+  }
+
+  /// 读取 UI 样式；未知值回退为 Material 3
+  static AppUiStyle _parseUiStyle(String? value) {
+    return AppUiStyle.values.firstWhere(
+      (style) => style.name == value?.trim().toLowerCase(),
+      orElse: () => AppUiStyle.material3,
     );
   }
 }

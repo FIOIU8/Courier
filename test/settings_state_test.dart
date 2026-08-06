@@ -575,4 +575,105 @@ void main() {
     expect(settings.aiModelIds.first, 'env-model');
     expect(settings.aiModelIds.contains('env-model'), isTrue);
   });
+
+  test('主题设置持久化往返：路径、透明度与 UI 样式', () async {
+    SharedPreferences.setMockInitialValues({
+      'theme_background_image': r'C:\images\wallpaper.png',
+      'theme_background_opacity': 0.85,
+      'theme_ui_style': 'vscode',
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.backgroundImagePath, r'C:\images\wallpaper.png');
+    expect(settings.backgroundOpacity, 0.85);
+    expect(settings.uiStyle, AppUiStyle.vscode);
+
+    await settings.setBackgroundImagePath(r'D:\new\bg.jpg');
+    await settings.setBackgroundOpacity(0.5);
+    await settings.setUiStyle(AppUiStyle.material3);
+    expect(settings.backgroundOpacity, 0.5);
+    expect(settings.uiStyle, AppUiStyle.material3);
+
+    // 清空路径视为"无背景图"
+    await settings.setBackgroundImagePath('   ');
+    expect(settings.backgroundImagePath, isEmpty);
+
+    final reloaded = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.backgroundImagePath, isEmpty);
+    expect(reloaded.backgroundOpacity, 0.5);
+    expect(reloaded.uiStyle, AppUiStyle.material3);
+  });
+
+  test('主题字段读盘钳制：透明度越界、样式未知、路径非法', () async {
+    SharedPreferences.setMockInitialValues({
+      'theme_background_opacity': 5.0,
+      'theme_ui_style': 'unknown-style',
+      'theme_background_image': 'x' * (SettingsState.maxBackgroundImagePathLength + 1),
+    });
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.backgroundOpacity, 1.0);
+    expect(settings.uiStyle, AppUiStyle.material3);
+    expect(settings.backgroundImagePath, isEmpty);
+
+    // 负透明度钳制到 0
+    SharedPreferences.setMockInitialValues({
+      'theme_background_opacity': -1.0,
+    });
+    final negative = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(negative.dispose);
+    await negative.load();
+    expect(negative.backgroundOpacity, 0.0);
+    expect(negative.backgroundImagePath, isEmpty);
+    expect(negative.uiStyle, AppUiStyle.material3);
+
+    // setter 拒绝越界透明度
+    await expectLater(
+      negative.setBackgroundOpacity(1.5),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    await expectLater(
+      negative.setBackgroundOpacity(double.nan),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+  });
+
+  test('主题字段默认值与非法路径 setter 处理', () async {
+    final settings = SettingsState(
+      secureStorage: SecureStorageService(store: MemoryCredentialStore()),
+      environment: const {},
+    );
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.backgroundImagePath, isEmpty);
+    expect(settings.backgroundOpacity, SettingsState.defaultBackgroundOpacity);
+    expect(settings.uiStyle, AppUiStyle.material3);
+
+    // 非法路径（含控制字符）按空值处理
+    await settings.setBackgroundImagePath('bad\u0000path');
+    expect(settings.backgroundImagePath, isEmpty);
+
+    // 同值设置不触发持久化也不报错
+    await settings.setUiStyle(AppUiStyle.material3);
+    await settings.setBackgroundOpacity(SettingsState.defaultBackgroundOpacity);
+  });
 }

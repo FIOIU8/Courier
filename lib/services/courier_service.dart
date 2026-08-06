@@ -147,6 +147,8 @@ class CourierService extends ChangeNotifier {
     return ai.stopSession();
   }
 
+  Future<void> aiSetSessionModel(String modelId) => ai.setSessionModel(modelId);
+
   AIGetOptionsResult aiGetOptions() => ai.options;
 
   Future<List<AIModelOption>> refreshAIModels() => ai.refreshModels();

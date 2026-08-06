@@ -81,4 +81,53 @@ void main() {
     expect(service.git.workspacePath, resolvedFirst);
     expect(logger.currentLogFile!.path, startsWith(resolvedFirst));
   });
+
+  test('aiSetSessionModel 门面切换当前会话模型且不改全局默认模型', () async {
+    SharedPreferences.setMockInitialValues({});
+    final workspace = await Directory.systemTemp.createTemp(
+      'courier-ai-set-',
+    );
+    addTearDown(() async {
+      if (await workspace.exists()) {
+        await workspace.delete(recursive: true);
+      }
+    });
+
+    final credentialStore = MemoryCredentialStore();
+    final secureStorage = SecureStorageService(store: credentialStore);
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.saveApiKey(generatedCredential());
+    await settings.addAiModel('model-a');
+    await settings.addAiModel('model-b');
+    await settings.setAiModelId('model-a');
+    final logger = AppLogger();
+    final service = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: AIService(
+        settings: settings,
+        secureStorage: secureStorage,
+        logger: logger,
+        providers: {'openai': FakeAIProviderClient()},
+      ),
+    );
+    addTearDown(() async {
+      await service.shutdown();
+      service.dispose();
+      settings.dispose();
+    });
+
+    await service.aiStartSession(workspacePath: workspace.path);
+    expect(service.aiSession?.modelId, 'model-a');
+
+    await service.aiSetSessionModel('model-b');
+    expect(service.aiSession?.modelId, 'model-b');
+    expect(settings.aiModelId, 'model-a', reason: '切换仅作用于会话');
+    expect(service.aiSession?.messageCount, 0);
+  });
 }

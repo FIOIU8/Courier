@@ -147,6 +147,14 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
 
   Widget _buildHeader(CourierService service, SettingsState settings) {
     final session = service.aiSession;
+    final modelIds = settings.aiModelIds;
+    final currentModel = session?.modelId ?? settings.aiModelId;
+    // 会话未建立、发送中或正在建会话时禁用切换（新建会话仍使用默认模型）
+    final canSwitchModel =
+        session != null &&
+        settings.aiConfigurationReady &&
+        !service.aiSending &&
+        !_sessionStarting;
     return Container(
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -163,17 +171,55 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
           ),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              session == null
-                  ? '供应商/模型未就绪'
-                  : '${settings.aiProviderId} · ${settings.aiModelId}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                color: session == null ? Colors.white38 : Colors.white70,
-              ),
-            ),
+            child: modelIds.isEmpty
+                ? Text(
+                    session == null
+                        ? '供应商/模型未就绪'
+                        : '${settings.aiProviderId} · ${session.modelId}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: session == null ? Colors.white38 : Colors.white70,
+                    ),
+                  )
+                : DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      key: const ValueKey('assistant-model-select'),
+                      value: modelIds.contains(currentModel) ? currentModel : null,
+                      isExpanded: true,
+                      isDense: true,
+                      dropdownColor: kGlassFloatBg,
+                      hint: Text(
+                        currentModel.isEmpty ? '选择模型' : currentModel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white38,
+                        ),
+                      ),
+                      items: modelIds
+                          .map(
+                            (model) => DropdownMenuItem(
+                              value: model,
+                              child: Text(
+                                model,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          )
+                          .toList(growable: false),
+                      onChanged: canSwitchModel
+                          ? (model) {
+                              if (model != null && model != currentModel) {
+                                unawaited(_switchSessionModel(model));
+                              }
+                            }
+                          : null,
+                    ),
+                  ),
           ),
           IconButton(
             tooltip: '新建会话',
@@ -185,6 +231,14 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
         ],
       ),
     );
+  }
+
+  Future<void> _switchSessionModel(String modelId) async {
+    try {
+      await context.read<CourierService>().aiSetSessionModel(modelId);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    }
   }
 
   Widget _buildConfigurationNotice() {

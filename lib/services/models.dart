@@ -34,12 +34,12 @@ class AISession {
     required this.createdAt,
   });
 
-  AISession copyWith({int? messageCount}) {
+  AISession copyWith({String? modelId, int? messageCount}) {
     return AISession(
       sessionId: sessionId,
       workspacePath: workspacePath,
       providerId: providerId,
-      modelId: modelId,
+      modelId: modelId ?? this.modelId,
       messageCount: messageCount ?? this.messageCount,
       createdAt: createdAt,
     );

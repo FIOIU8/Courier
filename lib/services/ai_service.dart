@@ -773,6 +773,33 @@ class AIService extends ChangeNotifier {
     return _session!;
   }
 
+  /// 切换当前会话使用的模型（仅作用于会话，不修改全局默认模型）。
+  /// 校验规则与 [SettingsState.validateModel] 一致；无会话时不报错，
+  /// 仅记录日志，下个会话仍使用默认模型。
+  Future<void> setSessionModel(String modelId) async {
+    final model = SettingsState.validateModel(modelId);
+    if (model.isEmpty) {
+      throw const CourierException('INVALID_SETTING', '供应商模型标识无效');
+    }
+    final current = _session;
+    if (current == null) {
+      await logger.info(
+        'ai',
+        'session_model_skipped',
+        '无会话，模型切换将在新会话生效',
+      );
+      return;
+    }
+    if (current.modelId == model) return;
+    _session = current.copyWith(modelId: model);
+    await logger.info(
+      'ai',
+      'session_model_changed',
+      '会话模型切换为 $model',
+    );
+    notifyListeners();
+  }
+
   Future<AISendMessageResult> sendMessage(String value) async {
     final currentSession = _session;
     if (currentSession == null) {

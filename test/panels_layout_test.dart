@@ -1,3 +1,5 @@
+// panels_layout_test.dart
+
 import 'package:courier_flutter/services/ai_service.dart';
 import 'package:courier_flutter/services/app_logger.dart';
 import 'package:courier_flutter/services/courier_service.dart';
@@ -6,6 +8,7 @@ import 'package:courier_flutter/services/secure_storage_service.dart';
 import 'package:courier_flutter/services/settings_state.dart';
 import 'package:courier_flutter/services/workspace_config_service.dart';
 import 'package:courier_flutter/services/workspace_service.dart';
+import 'package:courier_flutter/widgets/ai_assistant_panel.dart';
 import 'package:courier_flutter/widgets/right_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -222,6 +225,65 @@ void main() {
     // 快速切换后无位移残留、内容可见（无空白帧）
     expect(activeDx(), isEmpty, reason: '快速切换后应静止原位');
     expect(find.text('新会话'), findsOneWidget, reason: '助手面板内容应可见');
+    expect(tester.takeException(), isNull);
+  }, timeout: const Timeout(Duration(seconds: 20)));
+
+  testWidgets('助手面板 header 在无会话时显示模型下拉并禁用切换', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final secureStorage = SecureStorageService(store: MemoryCredentialStore());
+    final settings = SettingsState(
+      secureStorage: secureStorage,
+      environment: const {},
+    );
+    await settings.load();
+    await settings.saveApiKey(generatedCredential());
+    await settings.addAiModel('model-a');
+    await settings.addAiModel('model-b');
+    await settings.setAiModelId('model-a');
+    final logger = AppLogger();
+    final ai = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      providers: {'openai': FakeAIProviderClient()},
+    );
+    final courier = CourierService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: logger,
+      aiService: ai,
+    );
+    addTearDown(() {
+      courier.dispose();
+      settings.dispose();
+    });
+
+    tester.view.physicalSize = const Size(420, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsState>.value(value: settings),
+          ChangeNotifierProvider<CourierService>.value(value: courier),
+        ],
+        // workspacePath 为空：不建立会话（真实目录 IO 在 widget 测试中不可用）
+        child: const MaterialApp(
+          home: Scaffold(body: AIAssistantPanel(workspacePath: '')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 会话未建立：header 显示模型下拉（禁用），并展示默认模型
+    expect(courier.aiSession, isNull);
+    expect(find.byKey(const ValueKey('assistant-model-select')), findsOneWidget);
+    expect(find.text('model-a'), findsOneWidget, reason: '下拉显示当前默认模型');
+    final dropdown = tester.widget<DropdownButton<String>>(
+      find.byKey(const ValueKey('assistant-model-select')),
+    );
+    expect(dropdown.onChanged, isNull, reason: '会话未建立时切换应禁用');
+    expect(dropdown.items, hasLength(2), reason: '选项来自我的模型集合');
     expect(tester.takeException(), isNull);
   }, timeout: const Timeout(Duration(seconds: 20)));
 }

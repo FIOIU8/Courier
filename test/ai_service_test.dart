@@ -248,6 +248,67 @@ void main() {
     expect(service.options.providers.single.models.single.id, 'model-a');
   });
 
+  test('setSessionModel 更新会话模型且后续请求体跟随切换', () async {
+    await settings.saveApiKey(generatedCredential());
+    await settings.addAiModel('model-b');
+    final provider = FakeAIProviderClient(chunks: const ['切换后回复']);
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': provider},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+    expect(service.session?.modelId, 'model-under-test');
+
+    await service.setSessionModel('model-b');
+    expect(service.session?.modelId, 'model-b');
+    // 切换仅作用于会话，不修改全局默认模型
+    expect(settings.aiModelId, 'model-under-test');
+    expect(settings.aiModelIds, contains('model-under-test'));
+
+    final result = await service.sendMessage('切换模型后的请求');
+    expect(result.reply, '切换后回复');
+    expect(provider.requests.single.modelId, 'model-b');
+  });
+
+  test('setSessionModel 无会话时不报错且不改变默认模型', () async {
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': FakeAIProviderClient()},
+    );
+    addTearDown(service.dispose);
+
+    await service.setSessionModel('any-model');
+    expect(service.session, isNull);
+    expect(settings.aiModelId, 'model-under-test');
+  });
+
+  test('setSessionModel 拒绝空或非法模型标识', () async {
+    await settings.saveApiKey(generatedCredential());
+    final service = AIService(
+      settings: settings,
+      secureStorage: secureStorage,
+      logger: AppLogger(),
+      providers: {'openai': FakeAIProviderClient()},
+    );
+    addTearDown(service.dispose);
+    await service.startSession(workspacePath: workspace.path);
+
+    await expectLater(
+      service.setSessionModel(''),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    await expectLater(
+      service.setSessionModel('bad\u0000model'),
+      throwsCourierCode('INVALID_SETTING'),
+    );
+    expect(service.session?.modelId, 'model-under-test');
+  });
+
   test('缺少凭据时拒绝启动会话', () async {
     final provider = FakeAIProviderClient();
     final service = AIService(

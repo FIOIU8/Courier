@@ -42,6 +42,9 @@ class _GitPanelState extends State<GitPanel> {
 
   /// 提交详情面板高度（可拖动调整占用空间）
   double _detailHeight = 200;
+
+  /// 是否正在拖动详情面板调整高度（拖动期间禁用提交列表 Tooltip）
+  bool _detailResizing = false;
   String? _error;
 
   /// 是否有 Git 操作正在执行（用于防止连点）。
@@ -627,6 +630,8 @@ class _GitPanelState extends State<GitPanel> {
       cursor: SystemMouseCursors.resizeUpDown,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
+        onVerticalDragStart: (_) => setState(() => _detailResizing = true),
+        onVerticalDragEnd: (_) => setState(() => _detailResizing = false),
         onVerticalDragUpdate: (details) {
           setState(() {
             _detailHeight = (_detailHeight - details.delta.dy).clamp(
@@ -730,8 +735,9 @@ class _GitPanelState extends State<GitPanel> {
                         children: [
                           Expanded(
                             child: Tooltip(
-                              message:
-                                  '${entry.authorName} <${entry.authorEmail}>',
+                              message: _detailResizing
+                                  ? ''
+                                  : '${entry.authorName} <${entry.authorEmail}>',
                               child: Text(
                                 entry.authorName,
                                 maxLines: 1,

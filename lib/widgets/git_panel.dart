@@ -988,15 +988,21 @@ class _GitPanelState extends State<GitPanel> {
                 maxLines: 3,
                 keyboardType: TextInputType.multiline,
                 style: const TextStyle(fontSize: 12),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   isDense: true,
                   counterText: '',
                   hintText: '提交信息（Ctrl+Enter 提交）',
-                  contentPadding: EdgeInsets.symmetric(
+                  contentPadding: const EdgeInsets.symmetric(
                     horizontal: 9,
                     vertical: 8,
                   ),
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(
+                      color: accentColorOf(context),
+                      width: 1.5,
+                    ),
+                  ),
                 ),
               ),
             ),

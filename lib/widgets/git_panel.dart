@@ -11,6 +11,7 @@ import '../services/courier_service.dart';
 import '../services/models.dart';
 import '../services/settings_state.dart';
 import '../services/workspace_service.dart';
+import 'animations.dart';
 import 'glass.dart';
 
 enum _GitPanelView { changes, history }
@@ -410,11 +411,20 @@ class _GitPanelState extends State<GitPanel> {
         _buildToolbar(branches, busy),
         _buildViewSelector(),
         if (_error != null) _buildErrorBar(),
-        // 变更/历史视图直接切换（无过渡动画）
+        // 变更/历史视图原位淡入淡出切换（子视图各自带 Key）
         Expanded(
-          child: _view == _GitPanelView.changes
-              ? _buildChangesView(files, diff, busy)
-              : _buildHistoryView(log),
+          child: AnimatedSwitcher(
+            duration: kAnimDurationMed,
+            switchInCurve: kAnimCurveIn,
+            switchOutCurve: kAnimCurveOut,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: child,
+            ),
+            child: _view == _GitPanelView.changes
+                ? _buildChangesView(files, diff, busy)
+                : _buildHistoryView(log),
+          ),
         ),
       ],
     );
@@ -469,6 +479,7 @@ class _GitPanelState extends State<GitPanel> {
         .where(_matchesStatusFilter)
         .toList(growable: false);
     return Column(
+      key: const ValueKey('git-changes-view'),
       children: [
         _buildCommitBar(files, busy),
         _buildFilterBar(),

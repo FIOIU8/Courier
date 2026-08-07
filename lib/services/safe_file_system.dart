@@ -80,10 +80,9 @@ class SafeFileSystem {
 
   Future<String> bindWorkspace(String path) async {
     final resolved = await resolveWorkspace(path);
-    final canonical = await _canonicalizeRoot(resolved);
-    _workspaceRoot = canonical;
-    _comparisonRoot = _comparisonPath(canonical);
-    return canonical;
+    _workspaceRoot = resolved;
+    _comparisonRoot = _comparisonPath(resolved);
+    return resolved;
   }
 
   Future<String> validatePath(
@@ -360,11 +359,6 @@ class SafeFileSystem {
     );
   }
 
-  Future<String> _canonicalizeRoot(String root) async {
-    final resolved = await Directory(root).resolveSymbolicLinks();
-    return p.normalize(p.absolute(resolved));
-  }
-
   Future<String> _resolveSafely(
     String candidate, {
     required bool mustExist,
@@ -390,15 +384,7 @@ class SafeFileSystem {
       throw const CourierException('LINK_NOT_ALLOWED', '符号链接不允许作为文件操作目标');
     }
 
-    late final String resolvedAncestor;
-    if (type == FileSystemEntityType.directory) {
-      resolvedAncestor = await Directory(ancestor).resolveSymbolicLinks();
-    } else if (type == FileSystemEntityType.file) {
-      resolvedAncestor = await File(ancestor).resolveSymbolicLinks();
-    } else {
-      throw const CourierException('UNSUPPORTED_ENTRY', '目标类型不受支持');
-    }
-    return p.normalize(p.joinAll([resolvedAncestor, ...tail]));
+    return p.normalize(p.joinAll([ancestor, ...tail]));
   }
 
   void _ensureLexicallyWithin(String candidate, {required bool allowRoot}) {

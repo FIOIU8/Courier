@@ -111,6 +111,9 @@ class SettingsState extends ChangeNotifier {
   double _rightPanelOpacity = 1.0;
   double _titleBarOpacity = 1.0;
   double _statusBarOpacity = 1.0;
+
+  /// Git 操作成功后的轻提示（SnackBar），默认开启
+  bool _gitSuccessNotifications = true;
   bool _loaded = false;
 
   SettingsState({
@@ -188,6 +191,9 @@ class SettingsState extends ChangeNotifier {
 
   /// 状态栏透明度（0.0–1.0）
   double get statusBarOpacity => _statusBarOpacity;
+
+  /// Git 操作成功后的轻提示（SnackBar）开关
+  bool get gitSuccessNotifications => _gitSuccessNotifications;
 
   /// 当前强调色（自定义主题）
   Color get accentColor => Color(_accentColorValue);
@@ -343,6 +349,8 @@ class SettingsState extends ChangeNotifier {
       0.0,
       1.0,
     );
+    _gitSuccessNotifications =
+        preferences.getBool('git_success_notifications') ?? true;
     _apiKeyConfigured = await secureStorage.hasApiKey(_aiProviderId);
     _loaded = true;
     notifyListeners();
@@ -916,6 +924,19 @@ class SettingsState extends ChangeNotifier {
     }
     if (value == current) return;
     apply(value);
+    notifyListeners();
+  }
+
+  /// 设置 Git 操作成功后的轻提示（SnackBar）开关
+  Future<void> setGitSuccessNotifications(bool value) async {
+    if (value == _gitSuccessNotifications) return;
+    await _persist(
+      (preferences) => preferences.setBool(
+        'git_success_notifications',
+        value,
+      ),
+    );
+    _gitSuccessNotifications = value;
     notifyListeners();
   }
 

@@ -3,14 +3,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../services/courier_service.dart';
 import '../services/models.dart';
+import '../services/settings_state.dart';
 import '../services/workspace_service.dart';
 import 'glass.dart';
 
 enum _GitPanelView { changes, history }
+
+/// 变更列表的状态筛选：全部 / 已暂存 / 未暂存 / 未跟踪。
+enum _GitStatusFilter { all, staged, unstaged, untracked }
 
 class GitPanel extends StatefulWidget {
   const GitPanel({super.key});
@@ -22,6 +27,7 @@ class GitPanel extends StatefulWidget {
 class _GitPanelState extends State<GitPanel> {
   final TextEditingController _commitController = TextEditingController();
   _GitPanelView _view = _GitPanelView.changes;
+  _GitStatusFilter _statusFilter = _GitStatusFilter.all;
   String? _selectedPath;
   String? _selectedCommitHash;
   String? _commitDetail;
@@ -111,6 +117,26 @@ class _GitPanelState extends State<GitPanel> {
     }
   }
 
+  Future<void> _stageAll() async {
+    final service = context.read<CourierService>();
+    try {
+      await service.gitStageAll();
+      await _refresh();
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _unstageAll() async {
+    final service = context.read<CourierService>();
+    try {
+      await service.gitUnstageAll();
+      await _refresh();
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
   Future<void> _loadDiff(GitStatusFile file, {required bool staged}) async {
     final workspace = context.read<WorkspaceService>();
     final service = context.read<CourierService>();
@@ -182,6 +208,7 @@ class _GitPanelState extends State<GitPanel> {
         message: message,
       );
       _commitController.clear();
+      _showSnack('提交成功');
       await _refresh();
     } catch (error) {
       _showError(error);
@@ -237,6 +264,21 @@ class _GitPanelState extends State<GitPanel> {
     ).showSnackBar(SnackBar(content: Text('$error')));
   }
 
+  /// 成功操作的轻提示；[gitSuccessNotifications] 关闭时不展示。
+  void _showSnack(String message) {
+    if (!mounted) return;
+    if (!context.read<SettingsState>().gitSuccessNotifications) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final workspace = context.watch<WorkspaceService>();
@@ -267,6 +309,7 @@ class _GitPanelState extends State<GitPanel> {
     final files = status?.files ?? const <GitStatusFile>[];
     final diff = service.currentGitDiff;
     final log = service.currentGitLog;
+    final busy = _refreshing || git.loading;
 
     return Column(
       children: [
@@ -276,7 +319,7 @@ class _GitPanelState extends State<GitPanel> {
         // 变更/历史视图直接切换（无过渡动画）
         Expanded(
           child: _view == _GitPanelView.changes
-              ? _buildChangesView(files, diff)
+              ? _buildChangesView(files, diff, busy)
               : _buildHistoryView(log),
         ),
       ],
@@ -323,12 +366,20 @@ class _GitPanelState extends State<GitPanel> {
     );
   }
 
-  Widget _buildChangesView(List<GitStatusFile> files, GitDiffResult? diff) {
+  Widget _buildChangesView(
+    List<GitStatusFile> files,
+    GitDiffResult? diff,
+    bool busy,
+  ) {
+    final visibleFiles = files
+        .where(_matchesStatusFilter)
+        .toList(growable: false);
     return Column(
       children: [
-        _buildCommitBar(),
+        _buildCommitBar(files, busy),
+        _buildFilterBar(),
         SizedBox(
-          height: 190,
+          height: 160,
           child: files.isEmpty
               ? const Center(
                   child: Text(
@@ -336,9 +387,17 @@ class _GitPanelState extends State<GitPanel> {
                     style: TextStyle(fontSize: 12, color: Colors.white38),
                   ),
                 )
+              : visibleFiles.isEmpty
+              ? const Center(
+                  child: Text(
+                    '无符合条件的变更',
+                    style: TextStyle(fontSize: 12, color: Colors.white38),
+                  ),
+                )
               : ListView.builder(
-                  itemCount: files.length,
-                  itemBuilder: (context, index) => _buildFileRow(files[index]),
+                  itemCount: visibleFiles.length,
+                  itemBuilder: (context, index) =>
+                      _buildFileRow(visibleFiles[index], busy),
                 ),
         ),
         const Divider(height: 1),
@@ -716,32 +775,66 @@ class _GitPanelState extends State<GitPanel> {
     );
   }
 
-  Widget _buildCommitBar() {
+  Widget _buildCommitBar(List<GitStatusFile> files, bool busy) {
+    final hasStageable = files.any(
+      (file) => file.untracked || file.workTreeStatus.trim().isNotEmpty,
+    );
+    final hasStaged = files.any((file) => file.staged);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      padding: const EdgeInsets.fromLTRB(4, 8, 6, 8),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          IconButton(
+            tooltip: '全部暂存',
+            onPressed: (busy || !hasStageable) ? null : _stageAll,
+            icon: const Icon(Icons.select_all, size: 17),
+            constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+            padding: EdgeInsets.zero,
+          ),
+          IconButton(
+            tooltip: '全部取消暂存',
+            onPressed: (busy || !hasStaged) ? null : _unstageAll,
+            icon: const Icon(Icons.deselect, size: 17),
+            constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+            padding: EdgeInsets.zero,
+          ),
+          const SizedBox(width: 4),
           Expanded(
-            child: TextField(
-              controller: _commitController,
-              maxLength: 200,
-              maxLines: 1,
-              style: const TextStyle(fontSize: 12),
-              decoration: const InputDecoration(
-                isDense: true,
-                counterText: '',
-                hintText: '提交信息',
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 9,
-                  vertical: 8,
+            child: Focus(
+              onKeyEvent: (node, event) {
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.enter &&
+                    (HardwareKeyboard.instance.isControlPressed ||
+                        HardwareKeyboard.instance.isMetaPressed)) {
+                  _commit();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: TextField(
+                controller: _commitController,
+                maxLength: 200,
+                minLines: 1,
+                maxLines: 3,
+                keyboardType: TextInputType.multiline,
+                style: const TextStyle(fontSize: 12),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  counterText: '',
+                  hintText: '提交信息（Ctrl+Enter 提交）',
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 8,
+                  ),
+                  border: OutlineInputBorder(),
                 ),
-                border: OutlineInputBorder(),
               ),
             ),
           ),
           IconButton(
             tooltip: '提交已暂存变更',
-            onPressed: _commit,
+            onPressed: (busy || !hasStaged) ? null : _commit,
             icon: const Icon(Icons.commit, size: 17),
           ),
         ],
@@ -749,7 +842,51 @@ class _GitPanelState extends State<GitPanel> {
     );
   }
 
-  Widget _buildFileRow(GitStatusFile file) {
+  /// 变更列表的状态筛选条（纯前端过滤）。
+  Widget _buildFilterBar() {
+    const options = <(_GitStatusFilter, String)>[
+      (_GitStatusFilter.all, '全部'),
+      (_GitStatusFilter.staged, '已暂存'),
+      (_GitStatusFilter.unstaged, '未暂存'),
+      (_GitStatusFilter.untracked, '未跟踪'),
+    ];
+    return SizedBox(
+      height: 34,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+        children: [
+          for (final (value, label) in options)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                label: Text(label, style: const TextStyle(fontSize: 11)),
+                selected: _statusFilter == value,
+                showCheckmark: false,
+                visualDensity: VisualDensity.compact,
+                onSelected: (_) => setState(() => _statusFilter = value),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  bool _matchesStatusFilter(GitStatusFile file) {
+    switch (_statusFilter) {
+      case _GitStatusFilter.all:
+        return true;
+      case _GitStatusFilter.staged:
+        return file.staged;
+      case _GitStatusFilter.unstaged:
+        return !file.staged &&
+            (file.untracked || file.workTreeStatus.trim().isNotEmpty);
+      case _GitStatusFilter.untracked:
+        return file.untracked;
+    }
+  }
+
+  Widget _buildFileRow(GitStatusFile file, bool busy) {
     final canStage = file.untracked || file.workTreeStatus.trim().isNotEmpty;
     final canUnstage = file.staged;
     final selected = file.path == _selectedPath;
@@ -783,7 +920,7 @@ class _GitPanelState extends State<GitPanel> {
               if (canStage)
                 IconButton(
                   tooltip: '暂存',
-                  onPressed: () => _toggleStage(file, true),
+                  onPressed: busy ? null : () => _toggleStage(file, true),
                   icon: const Icon(Icons.add, size: 14),
                   constraints: const BoxConstraints.tightFor(
                     width: 28,
@@ -794,7 +931,7 @@ class _GitPanelState extends State<GitPanel> {
               if (canUnstage)
                 IconButton(
                   tooltip: '取消暂存',
-                  onPressed: () => _toggleStage(file, false),
+                  onPressed: busy ? null : () => _toggleStage(file, false),
                   icon: const Icon(Icons.remove, size: 14),
                   constraints: const BoxConstraints.tightFor(
                     width: 28,

@@ -87,11 +87,9 @@ Color glassFloatBgOf(BuildContext context) =>
     ? const Color(0xFF2D2D2D)
     : kGlassFloatBg;
 
-/// 当前 UI 样式下的选中高亮（VSCode 风格为选中蓝；玻璃风格跟随主题强调色）。
+/// 选中高亮（跟随主题强调色）。
 Color glassSelectedBgOf(BuildContext context) =>
-    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
-    ? VscodePalette.selection
-    : accentColorOf(context).withValues(alpha: 0.15);
+    accentColorOf(context).withValues(alpha: 0.15);
 
 /// 当前 UI 样式下的玻璃边界色。
 Color glassBorderOf(BuildContext context) =>

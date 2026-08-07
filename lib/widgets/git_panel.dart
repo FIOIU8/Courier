@@ -43,6 +43,10 @@ class _GitPanelState extends State<GitPanel> {
   double _detailHeight = 200;
   String? _error;
 
+  /// 是否有 Git 操作正在执行（用于防止连点）。
+  bool get _isBusy =>
+      _refreshing || context.read<CourierService>().git.loading;
+
   @override
   void initState() {
     super.initState();
@@ -105,6 +109,7 @@ class _GitPanelState extends State<GitPanel> {
   }
 
   Future<void> _toggleStage(GitStatusFile file, bool stage) async {
+    if (_isBusy) return;
     final service = context.read<CourierService>();
     try {
       if (stage) {
@@ -112,6 +117,7 @@ class _GitPanelState extends State<GitPanel> {
       } else {
         await service.gitUnstage(file.path);
       }
+      if (mounted) _showSnack(stage ? '已暂存 ${file.path}' : '已取消暂存 ${file.path}');
       await _refresh();
     } catch (error) {
       _showError(error);
@@ -119,9 +125,11 @@ class _GitPanelState extends State<GitPanel> {
   }
 
   Future<void> _stageAll() async {
+    if (_isBusy) return;
     final service = context.read<CourierService>();
     try {
       await service.gitStageAll();
+      if (mounted) _showSnack('已暂存全部变更');
       await _refresh();
     } catch (error) {
       _showError(error);
@@ -129,9 +137,11 @@ class _GitPanelState extends State<GitPanel> {
   }
 
   Future<void> _unstageAll() async {
+    if (_isBusy) return;
     final service = context.read<CourierService>();
     try {
       await service.gitUnstageAll();
+      if (mounted) _showSnack('已取消暂存全部变更');
       await _refresh();
     } catch (error) {
       _showError(error);
@@ -181,6 +191,7 @@ class _GitPanelState extends State<GitPanel> {
   }
 
   Future<void> _commit() async {
+    if (_isBusy) return;
     final message = _commitController.text.trim();
     if (message.isEmpty) return;
     final confirmed = await showDialog<bool>(
@@ -217,6 +228,7 @@ class _GitPanelState extends State<GitPanel> {
   }
 
   Future<void> _switchBranch(String branch) async {
+    if (_isBusy) return;
     final workspace = context.read<WorkspaceService>();
     if (workspace.hasDirtyDocuments) {
       _showError('存在未保存文档，不能切换分支');
@@ -251,6 +263,7 @@ class _GitPanelState extends State<GitPanel> {
           _detailExpanded = false;
         });
       }
+      if (mounted) _showSnack('已切换到 $branch');
       await _refresh();
     } catch (error) {
       _showError(error);
@@ -897,13 +910,23 @@ class _GitPanelState extends State<GitPanel> {
   Widget _buildErrorBar() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.only(left: 10, right: 6),
       color: const Color(0x1AEF4444),
-      child: Text(
-        _error!,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 11, color: Color(0xFFFCA5A5)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _error!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, color: Color(0xFFFCA5A5)),
+            ),
+          ),
+          TextButton(
+            onPressed: _refreshing ? null : _refresh,
+            child: const Text('重试', style: TextStyle(fontSize: 11)),
+          ),
+        ],
       ),
     );
   }

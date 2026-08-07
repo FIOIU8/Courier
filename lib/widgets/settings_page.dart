@@ -930,6 +930,13 @@ class _SettingsPageState extends State<SettingsPage> {
               : settings.showHiddenFiles,
           onChanged: (value) => unawaited(_setShowHidden(value)),
         ),
+        _switchRow(
+          label: 'Git 成功提示',
+          value: settings.gitSuccessNotifications,
+          onChanged: (value) => unawaited(
+            _applySetting(() => settings.setGitSuccessNotifications(value)),
+          ),
+        ),
         _settingRow(
           label: '日志级别',
           control: SizedBox(

@@ -229,7 +229,14 @@ class CourierService extends ChangeNotifier {
     return git.commit(message);
   }
 
+  Future<void> gitStageAll() => git.stageAll();
+
+  Future<void> gitUnstageAll() => git.unstageAll();
+
   Future<void> gitSwitchBranch(String branch) => git.switchBranch(branch);
+
+  Future<void> gitCreateBranch(String name, {bool switchTo = false}) =>
+      git.createBranch(name, switchTo: switchTo);
 
   Future<void> refreshAll() async {
     final workspace = _workspacePath;

@@ -180,6 +180,78 @@ void main() {
     expect(service.status?.currentBranch, 'feature-test');
   });
 
+  test('一键暂存与取消暂存全部变更', () async {
+    if (!gitAvailable) return;
+    final service = GitService(logger: AppLogger());
+    addTearDown(service.dispose);
+    await service.bindWorkspace(repository.path);
+
+    await File(
+      p.join(repository.path, 'tracked.txt'),
+    ).writeAsString('v2\n');
+    await File(p.join(repository.path, 'new.txt')).writeAsString('new\n');
+    await service.stageAll();
+    expect(service.status!.files.every((file) => file.staged), isTrue);
+    await service.unstageAll();
+    expect(service.status!.files.any((file) => file.staged), isFalse);
+    // 取消暂存后未跟踪文件仍保持未跟踪状态
+    final untracked = service.status!.files.singleWhere(
+      (file) => file.path == 'new.txt',
+    );
+    expect(untracked.untracked, isTrue);
+  });
+
+  test('无变更时一键暂存/取消暂存为空操作', () async {
+    if (!gitAvailable) return;
+    final service = GitService(logger: AppLogger());
+    addTearDown(service.dispose);
+    await service.bindWorkspace(repository.path);
+
+    await service.stageAll();
+    await service.unstageAll();
+    expect(service.status!.clean, isTrue);
+  });
+
+  test('创建分支并可选切换到新分支', () async {
+    if (!gitAvailable) return;
+    final service = GitService(logger: AppLogger());
+    addTearDown(service.dispose);
+    await service.bindWorkspace(repository.path);
+
+    await service.createBranch('new-feature');
+    expect(service.branches!.branches, contains('new-feature'));
+    expect(service.branches!.current, isNot('new-feature'));
+
+    await service.createBranch('second-feature', switchTo: true);
+    expect(service.branches!.branches, contains('second-feature'));
+    expect(service.status!.currentBranch, 'second-feature');
+  });
+
+  test('拒绝无效分支名与重复分支', () async {
+    if (!gitAvailable) return;
+    final service = GitService(logger: AppLogger());
+    addTearDown(service.dispose);
+    await service.bindWorkspace(repository.path);
+
+    await expectLater(
+      service.createBranch(''),
+      throwsCourierCode('INVALID_BRANCH_NAME'),
+    );
+    await expectLater(
+      service.createBranch('bad name'),
+      throwsCourierCode('INVALID_BRANCH_NAME'),
+    );
+    await expectLater(
+      service.createBranch('bad..name'),
+      throwsCourierCode('INVALID_BRANCH_NAME'),
+    );
+    await service.createBranch('existing-branch');
+    await expectLater(
+      service.createBranch('existing-branch'),
+      throwsCourierCode('BRANCH_ALREADY_EXISTS'),
+    );
+  });
+
   test('拒绝越界路径和非仓库根目录', () async {
     if (!gitAvailable) return;
     final service = GitService(logger: AppLogger());

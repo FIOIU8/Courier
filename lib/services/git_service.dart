@@ -221,6 +221,41 @@ class GitService extends ChangeNotifier {
     });
   }
 
+  /// 一键暂存全部可暂存变更（无变更时为空操作，不执行 git 命令）。
+  Future<void> stageAll() async {
+    await _runMutation(() {
+      return _runOperation('stage_all', () async {
+        _requireRepository();
+        final status = await refreshStatus();
+        final hasStageable = status.files.any(
+          (file) => file.untracked || file.workTreeStatus.trim().isNotEmpty,
+        );
+        if (!hasStageable) return;
+        await _runGit(['add', '-A']);
+        await refreshStatus();
+      });
+    });
+  }
+
+  /// 一键取消暂存全部已暂存变更（无已暂存变更时为空操作）。
+  Future<void> unstageAll() async {
+    await _runMutation(() {
+      return _runOperation('unstage_all', () async {
+        _requireRepository();
+        final status = await refreshStatus();
+        if (!status.files.any((file) => file.staged)) return;
+        final result = await _runGit(
+          ['restore', '--staged', '.'],
+          allowedExitCodes: const {0, 128},
+        );
+        if (result.exitCode != 0) {
+          await _runGit(['reset', '--quiet']);
+        }
+        await refreshStatus();
+      });
+    });
+  }
+
   Future<GitDiffResult> loadDiff({String? path, bool staged = false}) async {
     return _runOperation('diff', () async {
       _requireRepository();
@@ -276,26 +311,49 @@ class GitService extends ChangeNotifier {
 
   Future<void> switchBranch(String branch) async {
     await _runMutation(() {
-      return _runOperation('switch_branch', () async {
+      return _runOperation('switch_branch', () => _switchToBranch(branch));
+    });
+  }
+
+  /// 切换分支的核心逻辑（不含 [._runMutation] 串行化）。
+  /// 供 [switchBranch] 与 [createBranch]（创建后切换）复用，避免嵌套串行化死锁。
+  Future<void> _switchToBranch(String branch) async {
+    _requireRepository();
+    final branchList = await refreshBranches();
+    final normalized = branch.trim();
+    if (!branchList.branches.contains(normalized)) {
+      throw const CourierException('BRANCH_NOT_FOUND', '目标分支不存在');
+    }
+    final currentStatus = await refreshStatus();
+    if (!currentStatus.clean) {
+      throw const CourierException(
+        'WORKTREE_NOT_CLEAN',
+        '工作区存在未提交变更，已阻止切换分支',
+      );
+    }
+    if (normalized == branchList.current) return;
+    await _runGit(['switch', '--no-guess', '--', normalized]);
+    _diff = null;
+    await refreshStatus();
+    await refreshBranches();
+    await refreshLog();
+  }
+
+  /// 新建分支；[switchTo] 为 true 时创建后立即切换到新分支。
+  Future<void> createBranch(String name, {bool switchTo = false}) async {
+    await _runMutation(() {
+      return _runOperation('create_branch', () async {
         _requireRepository();
+        final normalized = _validateBranchName(name);
         final branchList = await refreshBranches();
-        final normalized = branch.trim();
-        if (!branchList.branches.contains(normalized)) {
-          throw const CourierException('BRANCH_NOT_FOUND', '目标分支不存在');
+        if (branchList.branches.contains(normalized)) {
+          throw const CourierException('BRANCH_ALREADY_EXISTS', '分支已存在');
         }
-        final currentStatus = await refreshStatus();
-        if (!currentStatus.clean) {
-          throw const CourierException(
-            'WORKTREE_NOT_CLEAN',
-            '工作区存在未提交变更，已阻止切换分支',
-          );
-        }
-        if (normalized == branchList.current) return;
-        await _runGit(['switch', '--no-guess', '--', normalized]);
-        _diff = null;
-        await refreshStatus();
+        await _runGit(['branch', '--', normalized]);
         await refreshBranches();
-        await refreshLog();
+        if (switchTo) {
+          await _switchToBranch(normalized);
+        }
       });
     });
   }
@@ -500,6 +558,33 @@ class GitService extends ChangeNotifier {
       );
     }
     return List<GitCommitEntry>.unmodifiable(entries);
+  }
+
+  /// 校验分支名：非空、无空白/控制字符、无常见非法字符。
+  /// 仅做前置友好校验，其余非法形式由 `git branch` 兜底拒绝。
+  String _validateBranchName(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      throw const CourierException('INVALID_BRANCH_NAME', '分支名不能为空');
+    }
+    if (normalized.contains(RegExp(r'[\s\x00-\x1F\x7F]'))) {
+      throw const CourierException(
+        'INVALID_BRANCH_NAME',
+        '分支名不能包含空格或控制字符',
+      );
+    }
+    if (normalized.startsWith('-') ||
+        normalized.startsWith('/') ||
+        normalized.endsWith('/') ||
+        normalized.endsWith('.') ||
+        normalized.contains('..') ||
+        normalized.contains(RegExp(r'[~^:?*\[\]\\@{}]'))) {
+      throw const CourierException(
+        'INVALID_BRANCH_NAME',
+        '分支名包含不允许的字符',
+      );
+    }
+    return normalized;
   }
 
   String _validateRelativePath(String value) {

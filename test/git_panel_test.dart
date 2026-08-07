@@ -298,6 +298,9 @@ void main() {
       isFalse,
     );
 
+    // 清理成功提示 SnackBar 计时器
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 1));
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
     await tester.runAsync(harness.courier.shutdown);

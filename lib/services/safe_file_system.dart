@@ -1,10 +1,12 @@
 // safe_file_system.dart - Workspace-bounded file operations.
 
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
 import 'app_error.dart';
@@ -426,7 +428,10 @@ class SafeFileSystem {
 
   String _comparisonPath(String value) {
     final normalized = p.normalize(p.absolute(value));
-    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+    if (Platform.isWindows) {
+      return _toLongPath(normalized).toLowerCase();
+    }
+    return normalized;
   }
 
   String _requireRoot() {
@@ -436,4 +441,29 @@ class SafeFileSystem {
     }
     return root;
   }
+}
+
+/// Converts a Windows short (8.3) path to its long form.
+/// Returns the original path unchanged on non-Windows platforms or when
+/// the conversion fails.
+String _toLongPath(String path) {
+  if (!Platform.isWindows) return path;
+
+  final kernel32 = DynamicLibrary.open('kernel32.dll');
+  final getLongPathNameW = kernel32.lookupFunction<
+      Uint32 Function(Pointer<Utf16>, Pointer<Utf16>, Uint32),
+      int Function(Pointer<Utf16>, Pointer<Utf16>, int)>('GetLongPathNameW');
+
+  final shortPath = path.toNativeUtf16();
+  final buffer = calloc<Uint16>(32767).cast<Utf16>();
+  try {
+    final length = getLongPathNameW(shortPath, buffer, 32767);
+    if (length > 0 && length < 32767) {
+      return buffer.toDartString();
+    }
+  } finally {
+    calloc.free(shortPath);
+    calloc.free(buffer);
+  }
+  return path;
 }

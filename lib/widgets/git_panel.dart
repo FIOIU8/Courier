@@ -42,6 +42,12 @@ class _GitPanelState extends State<GitPanel> {
 
   /// 提交详情面板高度（可拖动调整占用空间）
   double _detailHeight = 200;
+
+  /// 是否正在拖动详情面板调整高度（拖动期间禁用提交列表 Tooltip）
+  bool _detailResizing = false;
+
+  /// 拖动到达极限时未消耗的位移（用于下次补偿，防止错位）
+  double _dragOverflow = 0;
   String? _error;
 
   /// 是否有 Git 操作正在执行（用于防止连点）。
@@ -576,11 +582,12 @@ class _GitPanelState extends State<GitPanel> {
 
   Widget _buildHistoryView(GitLogResult? log) {
     final entries = log?.entries ?? const <GitCommitEntry>[];
+    final hasSelection = _detailExpanded && _selectedCommitHash != null;
     return Column(
       key: const Key('git-history-view'),
       children: [
-        SizedBox(
-          height: 190,
+        // 提交列表：未选中时占满全部空间；选中后自动收缩配合详情面板
+        Expanded(
           child: log == null && _refreshing
               ? const Center(
                   child: SizedBox(
@@ -602,9 +609,9 @@ class _GitPanelState extends State<GitPanel> {
                       _buildCommitRow(entries[index]),
                 ),
         ),
-        const Divider(height: 1),
-        // 提交详情默认隐藏；右键点击提交弹出，可拖动上边缘调整占用高度
-        if (_detailExpanded && _selectedCommitHash != null)
+        // 提交详情默认隐藏；点击提交后弹出，可拖动上边缘调整占用高度
+        if (hasSelection) ...[
+          const Divider(height: 1),
           SizedBox(
             height: _detailHeight,
             child: Column(
@@ -615,6 +622,7 @@ class _GitPanelState extends State<GitPanel> {
               ],
             ),
           ),
+        ],
       ],
     );
   }
@@ -625,12 +633,18 @@ class _GitPanelState extends State<GitPanel> {
       cursor: SystemMouseCursors.resizeUpDown,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
+        onVerticalDragStart: (_) => setState(() => _detailResizing = true),
+        onVerticalDragEnd: (_) => setState(() {
+          _detailResizing = false;
+          _dragOverflow = 0;
+        }),
         onVerticalDragUpdate: (details) {
           setState(() {
-            _detailHeight = (_detailHeight - details.delta.dy).clamp(
-              120.0,
-              340.0,
-            );
+            final target = _detailHeight - details.delta.dy + _dragOverflow;
+            final clamped = target.clamp(120.0, 340.0);
+            // 记录 clamp 时未消耗的位移，下次补偿，避免极限处错位
+            _dragOverflow = target - clamped;
+            _detailHeight = clamped;
           });
         },
         child: SizedBox(
@@ -728,8 +742,9 @@ class _GitPanelState extends State<GitPanel> {
                         children: [
                           Expanded(
                             child: Tooltip(
-                              message:
-                                  '${entry.authorName} <${entry.authorEmail}>',
+                              message: _detailResizing
+                                  ? ''
+                                  : '${entry.authorName} <${entry.authorEmail}>',
                               child: Text(
                                 entry.authorName,
                                 maxLines: 1,
@@ -986,15 +1001,21 @@ class _GitPanelState extends State<GitPanel> {
                 maxLines: 3,
                 keyboardType: TextInputType.multiline,
                 style: const TextStyle(fontSize: 12),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   isDense: true,
                   counterText: '',
                   hintText: '提交信息（Ctrl+Enter 提交）',
-                  contentPadding: EdgeInsets.symmetric(
+                  contentPadding: const EdgeInsets.symmetric(
                     horizontal: 9,
                     vertical: 8,
                   ),
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(
+                      color: accentColorOf(context),
+                      width: 1.5,
+                    ),
+                  ),
                 ),
               ),
             ),

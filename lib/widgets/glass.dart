@@ -55,9 +55,6 @@ const Color kGlassChipBg = Color(0x26FFFFFF);
 /// 悬停高亮
 const Color kGlassHoverBg = Color(0x3DFFFFFF);
 
-/// 选中高亮（主色 15%）
-const Color kGlassSelectedBg = Color(0x266366F1);
-
 /// 玻璃边界（深色半透明，对齐原项目 glass-border: 220 15% 40% / 0.12）
 const Color kGlassBorder = Color(0x1F615775);
 
@@ -90,11 +87,9 @@ Color glassFloatBgOf(BuildContext context) =>
     ? const Color(0xFF2D2D2D)
     : kGlassFloatBg;
 
-/// 当前 UI 样式下的选中高亮（VSCode 风格为选中蓝）。
+/// 选中高亮（跟随主题强调色）。
 Color glassSelectedBgOf(BuildContext context) =>
-    context.watch<SettingsState>().uiStyle == AppUiStyle.vscode
-    ? VscodePalette.selection
-    : kGlassSelectedBg;
+    accentColorOf(context).withValues(alpha: 0.15);
 
 /// 当前 UI 样式下的玻璃边界色。
 Color glassBorderOf(BuildContext context) =>

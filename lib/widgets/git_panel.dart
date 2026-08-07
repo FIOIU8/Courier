@@ -576,11 +576,12 @@ class _GitPanelState extends State<GitPanel> {
 
   Widget _buildHistoryView(GitLogResult? log) {
     final entries = log?.entries ?? const <GitCommitEntry>[];
+    final hasSelection = _detailExpanded && _selectedCommitHash != null;
     return Column(
       key: const Key('git-history-view'),
       children: [
-        SizedBox(
-          height: 190,
+        // 提交列表：未选中时占满全部空间；选中后自动收缩配合详情面板
+        Expanded(
           child: log == null && _refreshing
               ? const Center(
                   child: SizedBox(
@@ -602,9 +603,9 @@ class _GitPanelState extends State<GitPanel> {
                       _buildCommitRow(entries[index]),
                 ),
         ),
-        const Divider(height: 1),
-        // 提交详情默认隐藏；右键点击提交弹出，可拖动上边缘调整占用高度
-        if (_detailExpanded && _selectedCommitHash != null)
+        // 提交详情默认隐藏；点击提交后弹出，可拖动上边缘调整占用高度
+        if (hasSelection) ...[
+          const Divider(height: 1),
           SizedBox(
             height: _detailHeight,
             child: Column(
@@ -615,6 +616,7 @@ class _GitPanelState extends State<GitPanel> {
               ],
             ),
           ),
+        ],
       ],
     );
   }

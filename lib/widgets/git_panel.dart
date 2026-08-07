@@ -1,6 +1,7 @@
 // git_panel.dart - Safe Git status, history, diff, commit, and branch UI.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -402,29 +403,71 @@ class _GitPanelState extends State<GitPanel> {
         ),
         const Divider(height: 1),
         _buildDiffMode(),
-        Expanded(
-          child: diff == null || diff.diff.isEmpty
-              ? const Center(
-                  child: Text(
-                    '未选择差异',
-                    style: TextStyle(fontSize: 12, color: Colors.white38),
-                  ),
-                )
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.all(10),
-                  child: SelectableText(
-                    diff.truncated ? '${diff.diff}\n[输出已截断]' : diff.diff,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      height: 1.45,
-                      fontFamily: 'Consolas',
-                      color: Colors.white70,
-                    ),
-                  ),
-                ),
-        ),
+        Expanded(child: _buildDiffArea(diff)),
       ],
     );
+  }
+
+  /// diff 展示区：未选择时提示"未选择差异"；选中后无差异提示"无差异"；
+  /// 有差异时按行前缀做轻量语法高亮。
+  Widget _buildDiffArea(GitDiffResult? diff) {
+    if (diff == null || diff.diff.isEmpty) {
+      return Center(
+        child: Text(
+          _selectedPath == null ? '未选择差异' : '无差异',
+          style: const TextStyle(fontSize: 12, color: Colors.white38),
+        ),
+      );
+    }
+    final text = diff.truncated ? '${diff.diff}\n[输出已截断]' : diff.diff;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(10),
+      child: SelectableText.rich(
+        TextSpan(children: _highlightDiff(text)),
+        style: const TextStyle(
+          fontSize: 11,
+          height: 1.45,
+          fontFamily: 'Consolas',
+          color: Colors.white70,
+        ),
+      ),
+    );
+  }
+
+  /// 按 diff 行前缀着色：新增行 + 绿色、删除行 - 红色、@@ 头青色、
+  /// 文件头（diff --git / --- / +++ / index 等）弱色、其余默认色。
+  List<TextSpan> _highlightDiff(String diff) {
+    const defaultColor = Colors.white70;
+    const headerColor = Colors.white38;
+    const hunkColor = Color(0xFF6EC1E4);
+    const addColor = Color(0xFF7DD3A8);
+    const removeColor = Color(0xFFF2A0A0);
+    final spans = <TextSpan>[];
+    for (final line in const LineSplitter().convert(diff)) {
+      Color color = defaultColor;
+      if (line.startsWith('+++') ||
+          line.startsWith('---') ||
+          line.startsWith('diff --git') ||
+          line.startsWith('index ') ||
+          line.startsWith('new file') ||
+          line.startsWith('deleted file') ||
+          line.startsWith('similarity ') ||
+          line.startsWith('rename ') ||
+          line.startsWith('copy ') ||
+          line.startsWith('old mode') ||
+          line.startsWith('new mode') ||
+          line.startsWith('Binary files')) {
+        color = headerColor;
+      } else if (line.startsWith('@@')) {
+        color = hunkColor;
+      } else if (line.startsWith('+')) {
+        color = addColor;
+      } else if (line.startsWith('-')) {
+        color = removeColor;
+      }
+      spans.add(TextSpan(text: '$line\n', style: TextStyle(color: color)));
+    }
+    return spans;
   }
 
   Widget _buildHistoryView(GitLogResult? log) {

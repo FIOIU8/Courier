@@ -126,7 +126,7 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
     expect(find.text('tracked.txt'), findsOneWidget);
-    expect(find.textContaining('+changed'), findsOneWidget);
+    expect(find.textContaining('+changed', findRichText: true), findsOneWidget);
 
     await tester.tap(find.text('历史'));
     await tester.pump();
@@ -402,6 +402,66 @@ void main() {
     await tester.pump();
     await tester.runAsync(harness.courier.shutdown);
   }, timeout: const Timeout(Duration(seconds: 30)));
+
+  testWidgets('diff 行前缀语法高亮与空差异状态', (tester) async {
+    final harness = await _createGitPanelHarness(tester);
+    if (harness == null) return;
+    _addHarnessTeardown(tester, harness);
+    await harness.pump(tester);
+
+    // 点击文件行加载工作区 diff（在 runAsync 内触发，允许真实 git 进程完成）
+    await tester.runAsync(() async {
+      tester
+          .widget<InkWell>(
+            find
+                .ancestor(
+                  of: find.text('tracked.txt'),
+                  matching: find.byType(InkWell),
+                )
+                .first,
+          )
+          .onTap!();
+      await waitForCondition(() => harness.courier.git.loading);
+      await waitForCondition(() => !harness.courier.git.loading);
+    });
+    await tester.pump();
+
+    // 新增行 + 应为绿色
+    final selectable = tester.widget<SelectableText>(find.byType(SelectableText));
+    final addSpan = _findTextSpan(
+      selectable.textSpan!,
+      (span) => span.text?.contains('+changed') ?? false,
+    );
+    expect(addSpan, isNotNull);
+    expect(addSpan!.style?.color, const Color(0xFF7DD3A8));
+
+    // 切换到"已暂存"：tracked.txt 未暂存，staged diff 为空 → 显示"无差异"
+    await tester.runAsync(() async {
+      tester
+          .widget<SegmentedButton<bool>>(find.byType(SegmentedButton<bool>))
+          .onSelectionChanged!({true});
+      await waitForCondition(() => harness.courier.git.loading);
+      await waitForCondition(() => !harness.courier.git.loading);
+    });
+    await tester.pump();
+    expect(find.text('无差异'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.runAsync(harness.courier.shutdown);
+  }, timeout: const Timeout(Duration(seconds: 30)));
+}
+
+/// 在 [root] 子树中查找第一个满足 [predicate] 的 TextSpan。
+TextSpan? _findTextSpan(TextSpan root, bool Function(TextSpan) predicate) {
+  if (predicate(root)) return root;
+  for (final child in root.children ?? const <InlineSpan>[]) {
+    if (child is TextSpan) {
+      final found = _findTextSpan(child, predicate);
+      if (found != null) return found;
+    }
+  }
+  return null;
 }
 
 class _GitPanelHarness {

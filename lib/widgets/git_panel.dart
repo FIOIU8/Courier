@@ -45,6 +45,9 @@ class _GitPanelState extends State<GitPanel> {
 
   /// 是否正在拖动详情面板调整高度（拖动期间禁用提交列表 Tooltip）
   bool _detailResizing = false;
+
+  /// 拖动到达极限时未消耗的位移（用于下次补偿，防止错位）
+  double _dragOverflow = 0;
   String? _error;
 
   /// 是否有 Git 操作正在执行（用于防止连点）。
@@ -631,13 +634,17 @@ class _GitPanelState extends State<GitPanel> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onVerticalDragStart: (_) => setState(() => _detailResizing = true),
-        onVerticalDragEnd: (_) => setState(() => _detailResizing = false),
+        onVerticalDragEnd: (_) => setState(() {
+          _detailResizing = false;
+          _dragOverflow = 0;
+        }),
         onVerticalDragUpdate: (details) {
           setState(() {
-            _detailHeight = (_detailHeight - details.delta.dy).clamp(
-              120.0,
-              340.0,
-            );
+            final target = _detailHeight - details.delta.dy + _dragOverflow;
+            final clamped = target.clamp(120.0, 340.0);
+            // 记录 clamp 时未消耗的位移，下次补偿，避免极限处错位
+            _dragOverflow = target - clamped;
+            _detailHeight = clamped;
           });
         },
         child: SizedBox(

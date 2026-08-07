@@ -257,6 +257,86 @@ class _GitPanelState extends State<GitPanel> {
     }
   }
 
+  /// 新建分支：弹出输入框，可选"创建后切换"。
+  Future<void> _createBranch() async {
+    final workspace = context.read<WorkspaceService>();
+    final service = context.read<CourierService>();
+    final canSwitchNow =
+        !workspace.hasDirtyDocuments &&
+        (service.currentGitStatus?.clean ?? false);
+    final controller = TextEditingController();
+    var switchTo = false;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('新建分支'),
+        content: StatefulBuilder(
+          builder: (dialogContext, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLength: 100,
+                style: const TextStyle(fontSize: 12),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  counterText: '',
+                  hintText: '分支名称',
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) =>
+                    Navigator.of(dialogContext).pop(controller.text.trim()),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text(
+                  '创建后切换',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: switchTo,
+                onChanged: canSwitchNow
+                    ? (value) =>
+                          setDialogState(() => switchTo = value ?? false)
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(null),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('创建'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+    try {
+      await service.gitCreateBranch(name, switchTo: switchTo);
+      if (!mounted) return;
+      _showSnack(switchTo ? '已创建并切换到 $name' : '已创建分支 $name');
+      if (switchTo) {
+        setState(() {
+          _selectedPath = null;
+          _selectedCommitHash = null;
+          _commitDetail = null;
+          _loadingCommitDetail = false;
+          _detailExpanded = false;
+        });
+      }
+      await _refresh();
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
   void _showError(Object error) {
     if (!mounted) return;
     setState(() => _error = '$error');
@@ -314,7 +394,7 @@ class _GitPanelState extends State<GitPanel> {
 
     return Column(
       children: [
-        _buildToolbar(branches),
+        _buildToolbar(branches, busy),
         _buildViewSelector(),
         if (_error != null) _buildErrorBar(),
         // 变更/历史视图直接切换（无过渡动画）
@@ -740,7 +820,7 @@ class _GitPanelState extends State<GitPanel> {
         '${twoDigits(parsed.minute)}';
   }
 
-  Widget _buildToolbar(GitBranchListResult? branches) {
+  Widget _buildToolbar(GitBranchListResult? branches, bool busy) {
     final current = branches?.current ?? '';
     final branchItems = branches?.branches ?? const <String>[];
     final selectedBranch = branchItems.contains(current) ? current : null;
@@ -773,9 +853,14 @@ class _GitPanelState extends State<GitPanel> {
                       (branch) => DropdownMenuItem(
                         value: branch,
                         child: Text(
-                          branch,
+                          branch == current ? '$branch（当前）' : branch,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: branch == current
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                          ),
                         ),
                       ),
                     )
@@ -787,6 +872,11 @@ class _GitPanelState extends State<GitPanel> {
                 },
               ),
             ),
+          ),
+          IconButton(
+            tooltip: '新建分支',
+            onPressed: busy ? null : _createBranch,
+            icon: const Icon(Icons.add, size: 16),
           ),
           IconButton(
             tooltip: '刷新 Git 状态',

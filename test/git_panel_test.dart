@@ -450,6 +450,65 @@ void main() {
     await tester.pump();
     await tester.runAsync(harness.courier.shutdown);
   }, timeout: const Timeout(Duration(seconds: 30)));
+
+  testWidgets('新建分支对话框创建分支', (tester) async {
+    final harness = await _createGitPanelHarness(tester);
+    if (harness == null) return;
+    _addHarnessTeardown(tester, harness);
+    await harness.pump(tester);
+
+    // 当前分支在分支下拉中带"（当前）"标记
+    expect(find.textContaining('（当前）'), findsOneWidget);
+
+    // 打开新建分支对话框（在 runAsync 内触发）
+    await tester.runAsync(() async {
+      tester
+          .widget<IconButton>(
+            find.ancestor(
+              of: find.byTooltip('新建分支'),
+              matching: find.byType(IconButton),
+            ),
+          )
+          .onPressed!();
+    });
+    await tester.pump();
+    expect(find.text('新建分支'), findsOneWidget);
+
+    // 输入分支名并确认创建（确认在 runAsync 内触发）
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      'my-feature',
+    );
+    await tester.pump();
+    await tester.runAsync(() async {
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '创建'))
+          .onPressed!();
+      await waitForCondition(() => harness.courier.git.loading);
+      await waitForCondition(
+        () => harness.courier.gitBranches?.branches.contains('my-feature') ??
+            false,
+      );
+      await waitForCondition(() => !harness.courier.git.loading);
+    });
+    await tester.pump();
+
+    expect(
+      harness.courier.gitBranches!.branches,
+      contains('my-feature'),
+    );
+    expect(find.text('已创建分支 my-feature'), findsOneWidget);
+
+    // 清理 SnackBar 自动关闭计时器
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.runAsync(harness.courier.shutdown);
+  }, timeout: const Timeout(Duration(seconds: 30)));
 }
 
 /// 在 [root] 子树中查找第一个满足 [predicate] 的 TextSpan。

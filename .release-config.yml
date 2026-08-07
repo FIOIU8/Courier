@@ -1,0 +1,4 @@
+# Courier Flutter release configuration
+# prerelease: when true, auto-releases publish as GitHub Pre-release
+# Managed by set-release-config workflow — do not edit manually
+prerelease: true

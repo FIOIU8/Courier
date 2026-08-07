@@ -1,0 +1,274 @@
+name: Release Core
+
+on:
+  workflow_call:
+    inputs:
+      release_type:
+        description: '发布类型: auto (patch+1, build=0) | manual (build+1)'
+        required: true
+        type: string
+      prerelease:
+        description: '标记为 Pre-release'
+        required: true
+        type: boolean
+      make_latest:
+        description: '设为最新版本'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish when new commits exist
+    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout complete repository history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate release metadata
+        id: release_meta
+        shell: pwsh
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $releaseType = $env:RELEASE_TYPE
+          $latestTag = (git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags | Select-Object -First 1)
+          $baseSha = ''
+
+          if ([string]::IsNullOrWhiteSpace($latestTag)) {
+            if ($releaseType -eq 'manual') {
+              $newTag = 'v0.1.0.1'
+            } else {
+              $newTag = 'v0.1.0.0'
+            }
+          } else {
+            $latestTag = $latestTag.Trim()
+            $baseSha = (git rev-parse --verify "refs/tags/$latestTag^{commit}").Trim()
+            $commitCount = [int](git rev-list "$baseSha..HEAD" --count).Trim()
+            if ($commitCount -eq 0) {
+              'should_release=false' >> $env:GITHUB_OUTPUT
+              exit 0
+            }
+
+            $segments = $null
+            if ($latestTag -match '^v(\d+)\.(\d+)\.(\d+)\.(\d+)$') {
+              $segments = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+            } elseif ($latestTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
+              $segments = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], 0)
+            }
+
+            if ($null -eq $segments) {
+              $unixTime = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+              $newTag = "v0.0.0.$unixTime"
+            } else {
+              $major = $segments[0]
+              $minor = $segments[1]
+              $patch = $segments[2]
+              $build = $segments[3]
+
+              if ($releaseType -eq 'manual') {
+                $build += 1
+              } else {
+                $patch += 1
+                $build = 0
+              }
+
+              $newTag = "v$major.$minor.$patch.$build"
+            }
+          }
+
+          $existingTag = git tag --list $newTag
+          if (-not [string]::IsNullOrWhiteSpace(($existingTag -join ''))) {
+            throw "Calculated release tag already exists: $newTag"
+          }
+
+          'should_release=true' >> $env:GITHUB_OUTPUT
+          "new_tag=$newTag" >> $env:GITHUB_OUTPUT
+          "base_sha=$baseSha" >> $env:GITHUB_OUTPUT
+          "release_type=$releaseType" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Flutter
+        if: steps.release_meta.outputs.should_release == 'true'
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        if: steps.release_meta.outputs.should_release == 'true'
+        shell: pwsh
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve dependencies
+        if: steps.release_meta.outputs.should_release == 'true'
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Analyze project
+        if: steps.release_meta.outputs.should_release == 'true'
+        shell: pwsh
+        run: flutter analyze
+
+      - name: Run complete test suite
+        if: steps.release_meta.outputs.should_release == 'true'
+        shell: pwsh
+        run: flutter test
+
+      - name: Build Windows Release
+        if: steps.release_meta.outputs.should_release == 'true'
+        shell: pwsh
+        env:
+          COURIER_BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $buildTime = [DateTime]::UtcNow.ToString(
+            'o',
+            [Globalization.CultureInfo]::InvariantCulture
+          )
+          flutter build windows --release "--dart-define=COURIER_BUILD_COMMIT=$env:COURIER_BUILD_COMMIT" "--dart-define=COURIER_BUILD_TIME=$buildTime"
+
+      - name: Package Windows artifact
+        if: steps.release_meta.outputs.should_release == 'true'
+        id: package
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.new_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceDirectory = Join-Path $PWD 'build/windows/x64/runner/Release'
+          $executable = Join-Path $sourceDirectory 'courier_flutter.exe'
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            throw 'Windows Release executable was not produced.'
+          }
+
+          $distributionDirectory = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $distributionDirectory | Out-Null
+          $artifactPath = Join-Path $distributionDirectory "courier_flutter_windows_$env:RELEASE_TAG.zip"
+          Compress-Archive -Path (Join-Path $sourceDirectory '*') -DestinationPath $artifactPath -Force
+          "artifact_path=$artifactPath" >> $env:GITHUB_OUTPUT
+
+      - name: Generate release notes
+        if: steps.release_meta.outputs.should_release == 'true'
+        id: release_notes
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ steps.release_meta.outputs.base_sha }}
+          RELEASE_TYPE: ${{ steps.release_meta.outputs.release_type }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $range = if ([string]::IsNullOrWhiteSpace($env:BASE_SHA)) {
+            'HEAD'
+          } else {
+            "$env:BASE_SHA..HEAD"
+          }
+          $credentialPattern = (
+            '(?i)(' +
+            'authorization\s*:\s*bearer\s+\S+|' +
+            'x-api-key\s*[:=]\s*\S+|' +
+            'api[_ -]?key\s*[:=]\s*\S+|' +
+            'gh[pousr]_[A-Za-z0-9]{20,}|' +
+            'sk-[A-Za-z0-9_-]{16,}|' +
+            '-----BEGIN [A-Z ]*PRIVATE KEY-----' +
+            ')'
+          )
+          $commitMessages = git log $range --format='%B'
+          if (($commitMessages -join [Environment]::NewLine) -match $credentialPattern) {
+            throw 'Release stopped because a commit message resembles a credential.'
+          }
+
+          $tick = [char]96
+          $updates = foreach ($line in git log $range --format='%h%x09%s') {
+            $parts = $line -split [char]9, 2
+            if ($parts.Count -ne 2) {
+              continue
+            }
+            $hash = $parts[0].Trim()
+            $subject = $parts[1].Trim()
+            $subject = $subject.Replace([string][char]96, "'")
+            $subject = $subject.Replace('&', '&amp;')
+            $subject = $subject.Replace('<', '&lt;')
+            $subject = $subject.Replace('>', '&gt;')
+            "- $subject ($tick$hash$tick)"
+          }
+          if ($updates.Count -eq 0) {
+            throw 'Release notes did not contain any commits.'
+          }
+
+          $contributors = foreach ($line in git log --format='%aN%x09%aE') {
+            $parts = $line -split [char]9, 2
+            if ($parts.Count -ne 2) {
+              continue
+            }
+            $name = $parts[0].Trim()
+            $email = $parts[1].Trim()
+            if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($email)) {
+              continue
+            }
+            $name = $name.Replace('&', '&amp;')
+            $name = $name.Replace('<', '&lt;')
+            $name = $name.Replace('>', '&gt;')
+            $email = $email.Replace('&', '&amp;')
+            $email = $email.Replace('<', '&lt;')
+            $email = $email.Replace('>', '&gt;')
+            "- $name <$email>"
+          }
+          $contributors = $contributors | Sort-Object -Unique
+          if ($contributors.Count -eq 0) {
+            throw 'Release notes did not contain any contributors.'
+          }
+
+          $buildOrigin = if ($env:RELEASE_TYPE -eq 'manual') {
+            '此发布由手动构建生成'
+          } else {
+            '此发布由自动化构建生成'
+          }
+
+          $notesPath = Join-Path $PWD 'release-notes.md'
+          $content = @(
+            '## 更新内容'
+            ''
+          ) + $updates + @(
+            ''
+            '## 贡献列表'
+            ''
+          ) + $contributors + @(
+            ''
+            '---'
+            ''
+            $buildOrigin
+          )
+          [IO.File]::WriteAllLines($notesPath, $content, [Text.UTF8Encoding]::new($false))
+          "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        if: steps.release_meta.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.new_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Courier Flutter ${{ steps.release_meta.outputs.new_tag }}
+          body_path: ${{ steps.release_notes.outputs.notes_path }}
+          files: ${{ steps.package.outputs.artifact_path }}
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          prerelease: ${{ inputs.prerelease }}
+          make_latest: ${{ inputs.make_latest }}

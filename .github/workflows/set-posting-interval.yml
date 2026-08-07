@@ -1,0 +1,82 @@
+name: Set Posting Interval
+
+on:
+  workflow_dispatch:
+    inputs:
+      interval:
+        description: '发布间隔'
+        required: true
+        type: choice
+        options:
+          - 6h
+          - 12h
+          - daily
+          - 3days
+          - weekly
+
+permissions:
+  contents: write
+
+concurrency:
+  group: set-posting-interval
+  cancel-in-progress: true
+
+jobs:
+  update-interval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Update cron schedule
+        id: update
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $map = @{
+            '6h'     = '0 */6 * * *'
+            '12h'    = '0 */12 * * *'
+            'daily'  = '0 0 * * *'
+            '3days'  = '0 0 */3 * *'
+            'weekly' = '0 0 * * 0'
+          }
+          $choice = '${{ inputs.interval }}'
+          if (-not $map.ContainsKey($choice)) {
+            throw "Unknown interval: $choice"
+          }
+          $cron = $map[$choice]
+
+          $path = "$PWD/.github/workflows/auto-release.yml"
+          if (-not (Test-Path $path)) {
+            throw "auto-release.yml not found at $path"
+          }
+
+          $content = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+
+          $pattern = "(cron:\s*')[^']*('(\s*# RELEASE_CRON_MARKER)?)"
+          $replacement = "`$1$cron`$2"
+          if ($content -notmatch $pattern) {
+            throw "RELEASE_CRON_MARKER not found in auto-release.yml"
+          }
+          $content = [regex]::Replace($content, $pattern, $replacement)
+
+          [System.IO.File]::WriteAllText(
+            $path,
+            $content,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+          Write-Output "Updated cron to '$cron' ($choice)"
+
+      - name: Commit and push
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/auto-release.yml
+          git diff --cached --quiet || git commit -m "chore(release): set interval to ${{ inputs.interval }}"
+          git diff --cached --quiet || git push

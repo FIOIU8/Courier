@@ -1,0 +1,56 @@
+name: Set Release Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: '发布模式'
+        required: true
+        type: choice
+        options:
+          - pre-release
+          - stable
+
+permissions:
+  contents: write
+
+concurrency:
+  group: set-release-config
+  cancel-in-progress: true
+
+jobs:
+  update-config:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Write release config
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $value = if ('${{ inputs.release_mode }}' -eq 'stable') { 'false' } else { 'true' }
+          $lines = @(
+            '# Courier Flutter release configuration'
+            '# prerelease: when true, auto-releases publish as GitHub Pre-release'
+            '# Managed by set-release-config workflow — do not edit manually'
+            "prerelease: $value"
+          )
+          [System.IO.File]::WriteAllText(
+            "$PWD/.release-config.yml",
+            ($lines -join [Environment]::NewLine) + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Commit and push
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .release-config.yml
+          git diff --cached --quiet || git commit -m "chore(release): set mode to ${{ inputs.release_mode }}"
+          git diff --cached --quiet || git push

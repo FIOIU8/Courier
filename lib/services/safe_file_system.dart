@@ -80,9 +80,10 @@ class SafeFileSystem {
 
   Future<String> bindWorkspace(String path) async {
     final resolved = await resolveWorkspace(path);
-    _workspaceRoot = resolved;
-    _comparisonRoot = _comparisonPath(resolved);
-    return resolved;
+    final canonical = await _canonicalizeRoot(resolved);
+    _workspaceRoot = canonical;
+    _comparisonRoot = _comparisonPath(canonical);
+    return canonical;
   }
 
   Future<String> validatePath(
@@ -357,6 +358,11 @@ class SafeFileSystem {
       modifiedAt: stat.modified,
       sha256Digest: sha256.convert(bytes).toString(),
     );
+  }
+
+  Future<String> _canonicalizeRoot(String root) async {
+    final resolved = await Directory(root).resolveSymbolicLinks();
+    return p.normalize(p.absolute(resolved));
   }
 
   Future<String> _resolveSafely(

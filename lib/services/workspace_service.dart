@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_error.dart';
 import 'app_logger.dart';
+import 'id_generator.dart';
 import 'safe_file_system.dart';
 import 'workspace_config_service.dart';
 
@@ -515,7 +516,7 @@ class WorkspaceService extends ChangeNotifier {
     final count = _untitledCounter;
     final name = count == 1 ? '未命名.md' : '未命名 $count.md';
     final document = EditorDocument(
-      id: 'untitled-$count-${DateTime.now().microsecondsSinceEpoch}',
+      id: IdGenerator.create('untitled'),
       path: '',
       relativePath: '',
       fileName: name,

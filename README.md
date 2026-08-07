@@ -22,6 +22,28 @@ Courier 是一个面向本地工作区的 Windows 桌面 AI 代码编辑器。�
 - 外观定制：Material 3 毛玻璃与 VSCode 深色两种主题风格、自定义强调色、背景图片支持、各面板独立透明度控制。
 - 工作区配置：偏好、任务、日志和隔离区统一保存在 `.Courier/`。
 
+### 截图
+
+**编辑器与 AI 助手**
+
+![编辑器与 AI 助手](./images/images_main-ai.png)
+
+**Git 差异视图**
+
+![Git 差异视图](./images/images_main-git.png)
+
+**Git 暂存与文件列表**
+
+![Git 暂存与文件列表](./images/images_main-git-2.png)
+
+**AI Provider 设置**
+
+![AI Provider 设置](./images/images_settings-provider.png)
+
+**外观主题设置**
+
+![外观主题设置](./images/images_settings-theme.png)
+
 ## 平台
 
 | 平台 | 状态 |
@@ -165,6 +187,28 @@ Courier is a Windows desktop AI code editor designed for local workspaces. Built
 - **Git panel**: Status, per-file diff, stage, unstage, stage-all, unstage-all, commit, branch list, safe branch switching, and branch creation.
 - **Appearance customization**: Material 3 glassmorphism and VSCode dark flat themes, custom accent color, background image support, per-panel opacity controls.
 - **Workspace configuration**: Preferences, tasks, logs, and trash are unified under `.Courier/`.
+
+### Screenshots
+
+**Editor & AI Assistant**
+
+![Editor & AI Assistant](./images/images_main-ai.png)
+
+**Git Diff View**
+
+![Git Diff View](./images/images_main-git.png)
+
+**Git Stage & File List**
+
+![Git Stage & File List](./images/images_main-git-2.png)
+
+**AI Provider Settings**
+
+![AI Provider Settings](./images/images_settings-provider.png)
+
+**Appearance & Theme Settings**
+
+![Appearance & Theme Settings](./images/images_settings-theme.png)
 
 ## Platforms
 

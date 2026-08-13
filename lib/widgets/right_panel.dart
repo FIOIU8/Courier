@@ -42,7 +42,7 @@ class _RightPanelState extends State<RightPanel> {
     setState(() => _activeTab = index);
   }
 
-  /// 处理拖入的文件：自动切换到任务队列 Tab 并创建任务
+  /// 处理拖入的文件：自动切换到任务队列 Tab，弹出执行方式选择，然后创建任务
   void _handleDroppedFile(FileDragPayload payload) {
     // 自动切换到任务队列 Tab
     setState(() {
@@ -50,35 +50,47 @@ class _RightPanelState extends State<RightPanel> {
       _isDragOver = false;
     });
 
+    // 延迟到拖拽手势完全结束后再弹窗，避免与拖拽手势冲突
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted) _showConfigAndCreate(payload);
+    });
+  }
+
+  Future<void> _showConfigAndCreate(FileDragPayload payload) async {
+    if (!mounted) return;
     final service = context.read<CourierService>();
 
-    () async {
-      try {
-        final ws = context.read<WorkspaceService>();
-        final content = await ws.readFileContent(payload.path);
-        if (!mounted) return;
+    try {
+      // 先让用户选择执行方式和权限级别
+      final config = await TaskQueuePanel.showTaskConfigDialog(context);
+      if (config == null || !mounted) return;
 
-        await service.createTask(
-          title: payload.name,
-          sourceType: 'plan-file',
-          markdownContent: content,
+      final ws = context.read<WorkspaceService>();
+      final content = await ws.readFileContent(payload.path);
+      if (!mounted) return;
+
+      await service.createTask(
+        title: payload.name,
+        sourceType: 'plan-file',
+        markdownContent: content,
+        executorType: config.executorType,
+        permission: config.permission,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已从 ${payload.name} 创建任务'),
+            duration: const Duration(seconds: 2),
+          ),
         );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已从 ${payload.name} 创建任务'),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('创建任务失败: $e')));
-        }
       }
-    }();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('创建任务失败: $e')));
+      }
+    }
   }
 
   @override

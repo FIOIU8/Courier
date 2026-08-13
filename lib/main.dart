@@ -481,7 +481,7 @@ class _MainPageState extends State<MainPage> with WindowListener {
         final decision = await showDialog<_UnsavedDecision>(
           context: context,
           barrierDismissible: false,
-          builder: (dialogContext) => AlertDialog(
+          builder: (dialogContext) => CourierDialog(
             title: const Text('存在未保存文档'),
             content: Text('共有 ${workspace.dirtyDocuments.length} 个文档尚未保存。'),
             actions: [
@@ -561,7 +561,7 @@ class _MainPageState extends State<MainPage> with WindowListener {
       return await showDialog<String>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => CourierDialog(
           title: const Text('保存文档'),
           content: TextField(
             controller: controller,

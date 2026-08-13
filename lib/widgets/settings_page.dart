@@ -157,9 +157,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final deletingCurrent = settings.aiProviderId == provider.id;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: kDialogShapeOf(dialogContext),
-        backgroundColor: glassFloatBgOf(dialogContext),
+      builder: (dialogContext) => CourierDialog(
         title: const Text('删除自定义供应商'),
         content: Text(
           deletingCurrent
@@ -706,9 +704,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (settings.aiModelId == modelId && settings.aiModelIds.length > 1) {
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          shape: kDialogShapeOf(dialogContext),
-          backgroundColor: glassFloatBgOf(dialogContext),
+        builder: (dialogContext) => CourierDialog(
           title: const Text('删除默认模型'),
           content: const Text('删除后默认模型将自动回退为列表中的第一个模型。'),
           actions: [
@@ -1839,9 +1835,7 @@ class _CustomProviderDialogState extends State<_CustomProviderDialog> {
   @override
   Widget build(BuildContext context) {
     final editing = widget.existingProvider != null || _isBuiltIn;
-    return AlertDialog(
-      shape: kDialogShapeOf(context),
-      backgroundColor: glassFloatBgOf(context),
+    return CourierDialog(
       title: Text(
         _isBuiltIn
             ? '编辑供应商设置'
@@ -2199,9 +2193,7 @@ class _AddModelDialogState extends State<_AddModelDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      shape: kDialogShapeOf(context),
-      backgroundColor: glassFloatBgOf(context),
+    return CourierDialog(
       title: const Text('添加模型'),
       content: SizedBox(
         width: 460,

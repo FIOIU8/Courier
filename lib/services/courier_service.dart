@@ -6,6 +6,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'ai_service.dart';
 import 'app_error.dart';
 import 'app_logger.dart';
+import 'codex_task_executor.dart';
+import 'config_service.dart';
 import 'git_service.dart';
 import 'models.dart';
 import 'secure_storage_service.dart';
@@ -19,6 +21,7 @@ class CourierService extends ChangeNotifier {
   final AppLogger logger;
   final AIService ai;
   final TaskService taskQueue;
+  final ConfigService config;
   final GitService git;
   final AppVersionLoader _versionLoader;
 
@@ -32,6 +35,7 @@ class CourierService extends ChangeNotifier {
     required AppLogger logger,
     AIService? aiService,
     TaskService? taskService,
+    ConfigService? configService,
     GitService? gitService,
     AppVersionLoader? versionLoader,
   }) {
@@ -42,6 +46,7 @@ class CourierService extends ChangeNotifier {
           secureStorage: secureStorage,
           logger: logger,
         );
+    final resolvedConfig = configService ?? ConfigService(logger: logger);
     return CourierService._(
       settings: settings,
       logger: logger,
@@ -49,9 +54,13 @@ class CourierService extends ChangeNotifier {
       taskQueue:
           taskService ??
           TaskService(
-            executor: AITaskExecutor(aiService: resolvedAi),
+            executors: {
+              TaskExecutorType.ai: AITaskExecutor(aiService: resolvedAi),
+              TaskExecutorType.codex: CodexTaskExecutor(logger: logger),
+            },
             logger: logger,
           ),
+      config: resolvedConfig,
       git: gitService ?? GitService(logger: logger),
       versionLoader: versionLoader ?? _loadPackageVersion,
     );
@@ -62,6 +71,7 @@ class CourierService extends ChangeNotifier {
     required this.logger,
     required this.ai,
     required this.taskQueue,
+    required this.config,
     required this.git,
     required this._versionLoader,
   }) {
@@ -101,6 +111,8 @@ class CourierService extends ChangeNotifier {
     try {
       await logger.bindWorkspace(workspacePath);
       await taskQueue.bindWorkspace(workspacePath);
+      await config.bindWorkspace(workspacePath);
+      await config.detectCodex();
       await git.bindWorkspace(workspacePath);
       await ai.stopSession(clearMessages: true, allowMissing: true);
       _workspacePath = workspacePath;
@@ -161,11 +173,15 @@ class CourierService extends ChangeNotifier {
     required String title,
     required String sourceType,
     required String markdownContent,
+    String executorType = TaskExecutorType.ai,
+    String permission = TaskPermission.readOnly,
   }) {
     return taskQueue.createTask(
       title: title,
       sourceType: sourceType,
       markdownContent: markdownContent,
+      executorType: executorType,
+      permission: permission,
     );
   }
 
@@ -187,6 +203,9 @@ class CourierService extends ChangeNotifier {
   Future<void> cancelTask(String taskId) => taskQueue.cancelTask(taskId);
 
   Future<void> retryTask(String taskId) => taskQueue.retryTask(taskId);
+
+  Future<void> markTaskReviewed(String taskId) =>
+      taskQueue.markTaskReviewed(taskId);
 
   Future<QueueControlResult> startQueue() {
     return taskQueue.startQueue(maxConcurrent: settings.maxConcurrent);
@@ -251,6 +270,7 @@ class CourierService extends ChangeNotifier {
 
   Future<void> reset() async {
     await taskQueue.reset();
+    await config.reset();
     await git.reset();
     await ai.stopSession(clearMessages: true, allowMissing: true);
     await logger.unbind();

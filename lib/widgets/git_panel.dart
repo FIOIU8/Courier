@@ -203,7 +203,7 @@ class _GitPanelState extends State<GitPanel> {
     if (message.isEmpty) return;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => CourierDialog(
         title: const Text('确认提交'),
         content: Text(message, maxLines: 4, overflow: TextOverflow.ellipsis),
         actions: [
@@ -243,7 +243,7 @@ class _GitPanelState extends State<GitPanel> {
     }
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => CourierDialog(
         title: const Text('切换分支'),
         content: Text('切换到 $branch？'),
         actions: [
@@ -288,7 +288,7 @@ class _GitPanelState extends State<GitPanel> {
     var switchTo = false;
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => CourierDialog(
         title: const Text('新建分支'),
         content: StatefulBuilder(
           builder: (dialogContext, setDialogState) => Column(

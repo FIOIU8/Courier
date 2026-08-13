@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 import '../services/courier_service.dart';
 import '../services/workspace_service.dart';
 import 'glass.dart';
+import 'task_queue_panel.dart';
 
 /// 自定义 MIME 类型用于拖拽传递
 const String planDropMime = 'application/vnd.courier.plan+json';
@@ -608,7 +609,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       final decision = await showDialog<_WorkspaceSwitchDecision>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => CourierDialog(
           title: const Text('存在未保存文档'),
           content: Text('共有 ${workspace.dirtyDocuments.length} 个文档尚未保存。'),
           actions: [
@@ -698,7 +699,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       return await showDialog<String>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => CourierDialog(
           title: const Text('保存文档'),
           content: TextField(
             controller: controller,
@@ -909,9 +910,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: glassFloatBgOf(ctx),
-        shape: kDialogShapeOf(ctx),
+      builder: (ctx) => CourierDialog(
         title: Text(
           type == 'file' ? '创建文件' : '创建文件夹',
           style: const TextStyle(fontSize: 15, color: Colors.white),
@@ -989,9 +988,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: glassFloatBgOf(ctx),
-        shape: kDialogShapeOf(ctx),
+      builder: (ctx) => CourierDialog(
         title: const Text(
           '重命名',
           style: TextStyle(fontSize: 15, color: Colors.white),
@@ -1061,9 +1058,7 @@ class _FileTreeContainerState extends State<_FileTreeContainer> {
       final confirmed = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
-          backgroundColor: glassFloatBgOf(dialogContext),
-          shape: kDialogShapeOf(dialogContext),
+        builder: (dialogContext) => CourierDialog(
           title: const Text(
             '移至隔离区',
             style: TextStyle(fontSize: 15, color: Colors.white),
@@ -1154,6 +1149,10 @@ Future<void> _createTaskFromFile(
   FileTreeNode node,
 ) async {
   try {
+    // 先让用户选择执行方式和权限级别
+    final config = await TaskQueuePanel.showTaskConfigDialog(context);
+    if (config == null || !context.mounted) return;
+
     final workspace = context.read<WorkspaceService>();
     final content = await workspace.readFileContent(node.path);
     if (!context.mounted) return;
@@ -1161,6 +1160,8 @@ Future<void> _createTaskFromFile(
       title: node.name,
       sourceType: 'plan-file',
       markdownContent: content,
+      executorType: config.executorType,
+      permission: config.permission,
     );
     if (!context.mounted) return;
     ScaffoldMessenger.of(

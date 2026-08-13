@@ -105,7 +105,7 @@ class TaskService extends ChangeNotifier {
   static const int _maxTaskLogBytes = 1024 * 1024;
   static const int _maxResultBytes = 1024 * 1024;
 
-  final TaskExecutor executor;
+  final Map<String, TaskExecutor> executors;
   final AppLogger logger;
   final List<TaskItem> _tasks = [];
   final Map<String, TaskCancellationToken> _activeTokens = {};
@@ -123,7 +123,20 @@ class TaskService extends ChangeNotifier {
   Future<void> _taskLogChain = Future<void>.value();
   Timer? _progressPersistenceTimer;
 
-  TaskService({required this.executor, required this.logger});
+  TaskService({required this.executors, required this.logger});
+
+  /// 根据任务类型获取对应执行器。
+  TaskExecutor _executorFor(TaskItem task) {
+    final executor = executors[task.executorType];
+    if (executor != null) return executor;
+    // 回退到 ai 执行器
+    final aiExecutor = executors[TaskExecutorType.ai];
+    if (aiExecutor != null) return aiExecutor;
+    throw const CourierException(
+      'NO_EXECUTOR',
+      '没有可用的任务执行器',
+    );
+  }
 
   List<TaskItem> get tasks => List.unmodifiable(_tasks);
   String? get workspacePath => _workspacePath;
@@ -187,6 +200,8 @@ class TaskService extends ChangeNotifier {
     required String title,
     required String sourceType,
     required String markdownContent,
+    String executorType = TaskExecutorType.ai,
+    String permission = TaskPermission.readOnly,
     int maxAttempts = 3,
   }) async {
     _requireWorkspace();
@@ -203,6 +218,12 @@ class TaskService extends ChangeNotifier {
     if (!RegExp(r'^[a-z][a-z0-9_-]{1,31}$').hasMatch(normalizedSource)) {
       throw const CourierException('INVALID_TASK', '任务来源标识无效');
     }
+    if (!TaskExecutorType.isValid(executorType)) {
+      throw const CourierException('INVALID_TASK', '任务执行器类型无效');
+    }
+    if (!TaskPermission.isValid(permission)) {
+      throw const CourierException('INVALID_TASK', '任务权限级别无效');
+    }
     if (maxAttempts < 1 || maxAttempts > 10) {
       throw const CourierException('INVALID_TASK', '任务重试上限无效');
     }
@@ -212,6 +233,8 @@ class TaskService extends ChangeNotifier {
       id: IdGenerator.create('task'),
       title: normalizedTitle,
       sourceType: normalizedSource,
+      executorType: executorType,
+      permission: permission,
       status: TaskStatus.queued,
       markdownContent: normalizedContent,
       progress: 0,
@@ -353,7 +376,26 @@ class TaskService extends ChangeNotifier {
     await _appendTaskEvent(taskId, '正在取消任务');
     await _persist();
     notifyListeners();
-    await executor.cancel(taskId);
+    // 尝试所有执行器取消
+    for (final exec in executors.values) {
+      await exec.cancel(taskId).catchError((Object _) {});
+    }
+  }
+
+  /// 标记任务为已审查（待审查 → 已完成）。
+  Future<void> markTaskReviewed(String taskId) async {
+    final task = _findTask(taskId);
+    if (task.status != TaskStatus.succeeded) {
+      throw const CourierException(
+        'TASK_NOT_REVIEWABLE',
+        '只有已完成的任务可以标记审查',
+      );
+    }
+    if (task.reviewed) return;
+    _replaceTask(task.copyWith(reviewed: true, updatedAt: _now()));
+    await _appendTaskEvent(taskId, '任务已标记为已审查');
+    await _persist();
+    notifyListeners();
   }
 
   Future<void> retryTask(String taskId) async {
@@ -387,6 +429,14 @@ class TaskService extends ChangeNotifier {
     _scheduling = true;
     scheduleMicrotask(() {
       try {
+        // 自动启动队列：如果未运行但工作区已绑定且有排队任务，自动启动
+        if (!_queueRunning &&
+            _workspacePath != null &&
+            _tasks.any((t) => t.status == TaskStatus.queued)) {
+          _queueRunning = true;
+          _lastError = null;
+          notifyListeners();
+        }
         if (!_queueRunning || _workspacePath == null) return;
         while (_activeTokens.length < _maxConcurrent) {
           final next = _tasks
@@ -427,6 +477,7 @@ class TaskService extends ChangeNotifier {
       await _appendTaskEvent(started.id, '任务开始执行');
       await _persist();
       executionStarted = true;
+      final executor = _executorFor(started);
       final result = await executor.execute(
         started,
         workspacePath: _workspacePath!,
@@ -694,7 +745,10 @@ class TaskService extends ChangeNotifier {
     final activeIds = _activeTokens.keys.toList(growable: false);
     for (final taskId in activeIds) {
       _activeTokens[taskId]?.cancel();
-      await executor.cancel(taskId);
+      // 尝试所有执行器取消（不知道哪个在处理此任务）
+      for (final exec in executors.values) {
+        await exec.cancel(taskId).catchError((Object _) {});
+      }
     }
     if (_activeRuns.isNotEmpty) {
       await Future.wait(
@@ -746,6 +800,8 @@ class TaskService extends ChangeNotifier {
         task.markdownContent.trim().isEmpty ||
         task.markdownContent.length > _maxTaskContentCharacters ||
         !RegExp(r'^[a-z][a-z0-9_-]{1,31}$').hasMatch(task.sourceType) ||
+        !TaskExecutorType.isValid(task.executorType) ||
+        !TaskPermission.isValid(task.permission) ||
         task.attempt < 0 ||
         task.maxAttempts < 1 ||
         task.maxAttempts > 10 ||
@@ -813,7 +869,9 @@ class TaskService extends ChangeNotifier {
     for (final entry in _activeTokens.entries) {
       final token = entry.value;
       token.cancel();
-      unawaited(executor.cancel(entry.key).catchError((Object _) {}));
+      for (final exec in executors.values) {
+        unawaited(exec.cancel(entry.key).catchError((Object _) {}));
+      }
     }
     super.dispose();
   }

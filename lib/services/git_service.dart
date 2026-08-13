@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'app_error.dart';
 import 'app_logger.dart';
 import 'models.dart';
+import 'workspace_directory_guard.dart';
 
 class GitService extends ChangeNotifier {
   static const Duration _commandTimeout = Duration(seconds: 30);
@@ -618,18 +619,12 @@ class GitService extends ChangeNotifier {
   }
 
   bool _isWithinWorkspace(String path) {
-    final root = _comparisonPath(_workspacePath!);
-    final candidate = _comparisonPath(path);
-    return candidate == root || candidate.startsWith('$root${p.separator}');
+    return WorkspaceDirectoryGuard.isWithin(_workspacePath!, path);
   }
 
   bool _samePath(String left, String right) =>
-      _comparisonPath(left) == _comparisonPath(right);
-
-  String _comparisonPath(String path) {
-    final normalized = p.normalize(p.absolute(path));
-    return Platform.isWindows ? normalized.toLowerCase() : normalized;
-  }
+      WorkspaceDirectoryGuard.comparisonPath(left) ==
+      WorkspaceDirectoryGuard.comparisonPath(right);
 }
 
 class _GitCommandResult {

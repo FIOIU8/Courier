@@ -23,7 +23,7 @@ void main() {
 
   test('执行任务并持久化结果与状态', () async {
     final executor = ControllableTaskExecutor(output: '执行完成');
-    final service = TaskService(executor: executor, logger: AppLogger());
+    final service = TaskService(executors: {TaskExecutorType.ai: executor}, logger: AppLogger());
     await service.bindWorkspace(workspace.path);
     final task = await service.createTask(
       title: '持久化任务',
@@ -42,7 +42,7 @@ void main() {
     service.dispose();
 
     final reloaded = TaskService(
-      executor: ControllableTaskExecutor(),
+      executors: {TaskExecutorType.ai: ControllableTaskExecutor()},
       logger: AppLogger(),
     );
     addTearDown(reloaded.dispose);
@@ -54,7 +54,7 @@ void main() {
   test('取消运行中任务会持久化取消状态', () async {
     final gate = Completer<void>();
     final executor = ControllableTaskExecutor(release: gate);
-    final service = TaskService(executor: executor, logger: AppLogger());
+    final service = TaskService(executors: {TaskExecutorType.ai: executor}, logger: AppLogger());
     addTearDown(service.dispose);
     await service.bindWorkspace(workspace.path);
     final task = await service.createTask(
@@ -85,7 +85,7 @@ void main() {
     });
     final gate = Completer<void>();
     final executor = ControllableTaskExecutor(release: gate);
-    final service = TaskService(executor: executor, logger: AppLogger());
+    final service = TaskService(executors: {TaskExecutorType.ai: executor}, logger: AppLogger());
     addTearDown(service.dispose);
     await service.bindWorkspace(workspace.path);
     final task = await service.createTask(
@@ -101,7 +101,7 @@ void main() {
     expect(executor.cancelledTaskIds, contains(task.id));
 
     final oldWorkspaceView = TaskService(
-      executor: ControllableTaskExecutor(),
+      executors: {TaskExecutorType.ai: ControllableTaskExecutor()},
       logger: AppLogger(),
     );
     addTearDown(oldWorkspaceView.dispose);
@@ -148,7 +148,7 @@ void main() {
     ).writeAsString(jsonEncode(index), flush: true);
 
     final service = TaskService(
-      executor: ControllableTaskExecutor(),
+      executors: {TaskExecutorType.ai: ControllableTaskExecutor()},
       logger: AppLogger(),
     );
     addTearDown(service.dispose);
@@ -160,7 +160,7 @@ void main() {
 
   test('任务启动持久化失败时停止队列且不执行任务', () async {
     final executor = ControllableTaskExecutor();
-    final service = TaskService(executor: executor, logger: AppLogger());
+    final service = TaskService(executors: {TaskExecutorType.ai: executor}, logger: AppLogger());
     addTearDown(service.dispose);
     await service.bindWorkspace(workspace.path);
     final task = await service.createTask(

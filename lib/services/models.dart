@@ -336,13 +336,75 @@ class TaskStatus {
   TaskStatus._();
 }
 
+/// Codex 执行权限级别：控制 Codex CLI 可执行的操作范围。
+class TaskPermission {
+  /// 仅读取：Codex 只能读取文件，不能写入/创建/删除
+  static const readOnly = 'readOnly';
+
+  /// 读取与写入：Codex 可以读取、写入和删除文件
+  static const readWrite = 'readWrite';
+
+  /// YOLO：自动同意所有操作（危险，需用户确认）
+  static const yolo = 'yolo';
+
+  static const values = {readOnly, readWrite, yolo};
+
+  static bool isValid(String permission) => values.contains(permission);
+
+  /// 权限级别的中文显示标签
+  static String label(String permission) => switch (permission) {
+    readOnly => '仅读取',
+    readWrite => '读取与写入',
+    yolo => 'YOLO（全自动）',
+    _ => permission,
+  };
+
+  /// 权限级别的说明文字
+  static String description(String permission) => switch (permission) {
+    readOnly => 'Codex 只能读取文件，不会修改工作区',
+    readWrite => 'Codex 可以读取、写入和删除文件',
+    yolo => '危险：Codex 将自动同意所有操作，可能导致不可逆的数据丢失',
+    _ => '',
+  };
+
+  /// YOLO 模式的警告弹窗内容
+  static const yoloWarning = 'YOLO 模式下 Codex 将自动同意所有操作（包括删除、'
+      '覆盖文件等），可能导致不可逆的数据丢失。\n\n确定要继续吗？';
+
+  TaskPermission._();
+}
+
+/// 任务执行器类型：决定任务由哪个后端执行。
+class TaskExecutorType {
+  /// AI 助手执行（通过配置的 AI 供应商 API）
+  static const ai = 'ai';
+
+  /// Codex CLI 执行（通过本地 codex 命令行工具）
+  static const codex = 'codex';
+
+  static const values = {ai, codex};
+
+  static bool isValid(String type) => values.contains(type);
+
+  static String label(String type) => switch (type) {
+    ai => 'AI 助手',
+    codex => 'Codex CLI',
+    _ => type,
+  };
+
+  TaskExecutorType._();
+}
+
 const _unset = Object();
 
 class TaskItem {
   final String id;
   final String title;
   final String sourceType;
+  final String executorType;
+  final String permission;
   final String status;
+  final bool reviewed;
   final String markdownContent;
   final double progress;
   final String createdAt;
@@ -359,7 +421,10 @@ class TaskItem {
     required this.id,
     required this.title,
     required this.sourceType,
+    this.executorType = TaskExecutorType.ai,
+    this.permission = TaskPermission.readOnly,
     required this.status,
+    this.reviewed = false,
     required this.markdownContent,
     required this.progress,
     required this.createdAt,
@@ -378,11 +443,26 @@ class TaskItem {
     if (status is! String || !TaskStatus.isValid(status)) {
       throw const FormatException('Invalid task status');
     }
+    final executorType = json['executorType'] as String?;
+    if (executorType != null && !TaskExecutorType.isValid(executorType)) {
+      throw const FormatException('Invalid task executor type');
+    }
+    final permission = json['permission'] as String?;
+    if (permission != null && !TaskPermission.isValid(permission)) {
+      throw const FormatException('Invalid task permission');
+    }
+    final reviewed = json['reviewed'];
+    if (reviewed != null && reviewed is! bool) {
+      throw const FormatException('Invalid task reviewed flag');
+    }
     return TaskItem(
       id: _requiredString(json, 'id'),
       title: _requiredString(json, 'title'),
       sourceType: _requiredString(json, 'sourceType'),
+      executorType: executorType ?? TaskExecutorType.ai,
+      permission: permission ?? TaskPermission.readOnly,
       status: status,
+      reviewed: reviewed ?? false,
       markdownContent: _requiredString(json, 'markdownContent'),
       progress: _requiredNumber(json, 'progress').clamp(0.0, 1.0).toDouble(),
       createdAt: _requiredString(json, 'createdAt'),
@@ -401,7 +481,10 @@ class TaskItem {
     'id': id,
     'title': title,
     'sourceType': sourceType,
+    'executorType': executorType,
+    'permission': permission,
     'status': status,
+    'reviewed': reviewed,
     'markdownContent': markdownContent,
     'progress': progress,
     'createdAt': createdAt,
@@ -417,7 +500,11 @@ class TaskItem {
 
   TaskItem copyWith({
     String? title,
+    String? sourceType,
+    String? executorType,
+    String? permission,
     String? status,
+    bool? reviewed,
     double? progress,
     String? updatedAt,
     Object? startedAt = _unset,
@@ -431,8 +518,11 @@ class TaskItem {
     return TaskItem(
       id: id,
       title: title ?? this.title,
-      sourceType: sourceType,
+      sourceType: sourceType ?? this.sourceType,
+      executorType: executorType ?? this.executorType,
+      permission: permission ?? this.permission,
       status: status ?? this.status,
+      reviewed: reviewed ?? this.reviewed,
       markdownContent: markdownContent,
       progress: (progress ?? this.progress).clamp(0.0, 1.0),
       createdAt: createdAt,

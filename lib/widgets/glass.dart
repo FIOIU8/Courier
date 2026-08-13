@@ -115,13 +115,101 @@ Color glassSurfaceSolidColor(BuildContext context) =>
     : const Color(0xFF0C1220);
 
 /// 统一对话框圆角与边框样式（随 UI 样式联动）。
-ShapeBorder kDialogShapeOf(BuildContext context) => RoundedRectangleBorder(
-  borderRadius: BorderRadius.circular(kRadiusLg),
-  side: BorderSide(color: glassBorderOf(context)),
-);
+/// MD3：大圆角 + 厚边框；VSCode：小圆角 + 薄边框。
+ShapeBorder kDialogShapeOf(BuildContext context) {
+  final isVscode = context.watch<SettingsState>().uiStyle == AppUiStyle.vscode;
+  return RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(isVscode ? 4 : 28),
+    side: BorderSide(
+      color: glassBorderOf(context),
+      width: isVscode ? 0.5 : 2.0,
+    ),
+  );
+}
 
 // ============================================================
-// 二、Glass — 毛玻璃容器
+// 二、CourierDialog — 主题感知对话框
+// ============================================================
+
+/// 主题感知的对话框包装器。
+/// MD3：大圆角(28) + 厚边框(2.0)；VSCode：小圆角(4) + 薄边框(0.5)。
+/// 用法与 [AlertDialog] 一致，只需将 [AlertDialog] 替换为 [CourierDialog]。
+class CourierDialog extends StatelessWidget {
+  final Widget? icon;
+  final Widget? title;
+  final Widget? content;
+  final List<Widget>? actions;
+  final EdgeInsetsGeometry? actionsPadding;
+  final MainAxisAlignment? actionsAlignment;
+  final OverflowBarAlignment? actionsOverflowAlignment;
+  final VerticalDirection? actionsOverflowDirection;
+  final Clip? clipBehavior;
+  final EdgeInsets? insetPadding;
+  final Alignment? alignment;
+  final double? elevation;
+  final Color? shadowColor;
+  final Color? surfaceTintColor;
+  final String? semanticLabel;
+  final EdgeInsets? titlePadding;
+  final TextStyle? titleTextStyle;
+  final EdgeInsets? contentPadding;
+  final TextStyle? contentTextStyle;
+  final bool scrollable;
+
+  const CourierDialog({
+    super.key,
+    this.icon,
+    this.title,
+    this.content,
+    this.actions,
+    this.actionsPadding,
+    this.actionsAlignment,
+    this.actionsOverflowAlignment,
+    this.actionsOverflowDirection,
+    this.clipBehavior,
+    this.insetPadding,
+    this.alignment,
+    this.elevation,
+    this.shadowColor,
+    this.surfaceTintColor,
+    this.semanticLabel,
+    this.titlePadding,
+    this.titleTextStyle,
+    this.contentPadding,
+    this.contentTextStyle,
+    this.scrollable = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: icon,
+      title: title,
+      content: content,
+      actions: actions,
+      actionsPadding: actionsPadding,
+      actionsAlignment: actionsAlignment,
+      actionsOverflowAlignment: actionsOverflowAlignment,
+      actionsOverflowDirection: actionsOverflowDirection,
+      clipBehavior: clipBehavior,
+      insetPadding: insetPadding,
+      alignment: alignment,
+      elevation: elevation,
+      shadowColor: shadowColor,
+      surfaceTintColor: surfaceTintColor,
+      semanticLabel: semanticLabel,
+      titlePadding: titlePadding,
+      titleTextStyle: titleTextStyle,
+      contentPadding: contentPadding,
+      contentTextStyle: contentTextStyle,
+      scrollable: scrollable,
+      shape: kDialogShapeOf(context),
+    );
+  }
+}
+
+// ============================================================
+// 三、Glass — 毛玻璃容器
 // ============================================================
 
 /// 圆角 + 半透明底色 + 毛玻璃模糊 + 悬浮阴影的容器。
@@ -201,7 +289,7 @@ class Glass extends StatelessWidget {
 }
 
 // ============================================================
-// 三、HoverCard — 悬停提升的悬浮卡片
+// 四、HoverCard — 悬停提升的悬浮卡片
 // ============================================================
 
 /// 鼠标悬停时阴影增强、背景提亮的卡片（任务卡片、列表项等）。

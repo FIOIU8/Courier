@@ -13,6 +13,7 @@ import '../services/courier_service.dart';
 import '../services/settings_state.dart';
 import '../services/workspace_service.dart';
 import 'glass.dart';
+import 'task_queue_panel.dart';
 
 class EditorPanel extends StatelessWidget {
   const EditorPanel({super.key});
@@ -203,7 +204,7 @@ class EditorPanel extends StatelessWidget {
       final decision = await showDialog<_CloseDecision>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => CourierDialog(
           title: const Text('未保存文档'),
           content: Text(document.fileName),
           actions: [
@@ -259,7 +260,7 @@ class EditorPanel extends StatelessWidget {
     try {
       return await showDialog<String>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => CourierDialog(
           title: const Text('保存文档'),
           content: TextField(
             controller: controller,
@@ -544,12 +545,18 @@ class _EditorContentState extends State<_EditorContent> {
   }
 
   Future<void> _createTask(BuildContext context) async {
-    final service = context.read<CourierService>();
     try {
+      // 先让用户选择执行方式和权限级别
+      final config = await TaskQueuePanel.showTaskConfigDialog(context);
+      if (config == null || !context.mounted) return;
+
+      final service = context.read<CourierService>();
       await service.createTask(
         title: doc.untitled ? '未命名任务' : doc.fileName,
         sourceType: doc.untitled ? 'manual' : 'plan-file',
         markdownContent: doc.content,
+        executorType: config.executorType,
+        permission: config.permission,
       );
       if (!context.mounted) return;
       ScaffoldMessenger.of(
@@ -568,7 +575,7 @@ class _EditorContentState extends State<_EditorContent> {
     try {
       return await showDialog<String>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => CourierDialog(
           title: const Text('保存新文件'),
           content: TextField(
             autofocus: true,
@@ -602,8 +609,8 @@ class _EditorContentState extends State<_EditorContent> {
     final decision = await showDialog<_ExternalChangeDecision>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('文件已在外部修改'),
+        builder: (dialogContext) => CourierDialog(
+          title: const Text('文件已在外部修改'),
         content: Text(doc.fileName),
         actions: [
           TextButton(

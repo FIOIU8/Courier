@@ -61,7 +61,7 @@ class WorkspaceDirectoryGuard {
       final resolved = p.normalize(
         await Directory(candidate).resolveSymbolicLinks(),
       );
-      if (!_isWithin(root, resolved)) {
+      if (!isWithin(root, resolved)) {
         throw const CourierException(
           'COURIER_DIRECTORY_UNSAFE',
           '应用元数据目录超出工作区边界',
@@ -72,14 +72,14 @@ class WorkspaceDirectoryGuard {
     return Directory(current);
   }
 
-  static bool _isWithin(String root, String candidate) {
-    final comparedRoot = _comparisonPath(root);
-    final comparedCandidate = _comparisonPath(candidate);
+  static bool isWithin(String root, String candidate) {
+    final comparedRoot = comparisonPath(root);
+    final comparedCandidate = comparisonPath(candidate);
     return comparedCandidate == comparedRoot ||
         comparedCandidate.startsWith('$comparedRoot${p.separator}');
   }
 
-  static String _comparisonPath(String value) {
+  static String comparisonPath(String value) {
     final normalized = p.normalize(p.absolute(value));
     return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }

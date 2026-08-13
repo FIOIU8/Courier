@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:courier_flutter/services/ai_service.dart';
 import 'package:courier_flutter/services/app_logger.dart';
 import 'package:courier_flutter/services/courier_service.dart';
+import 'package:courier_flutter/services/models.dart';
 import 'package:courier_flutter/services/secure_storage_service.dart';
 import 'package:courier_flutter/services/settings_state.dart';
 import 'package:courier_flutter/services/task_service.dart';
@@ -45,7 +46,7 @@ void main() {
       providers: {'openai': FakeAIProviderClient()},
     );
     final taskService = TaskService(
-      executor: ControllableTaskExecutor(),
+      executors: {TaskExecutorType.ai: ControllableTaskExecutor()},
       logger: logger,
     );
     final service = CourierService(

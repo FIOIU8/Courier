@@ -7,7 +7,7 @@
 <a id="courier-中文"></a>
 # Courier
 
-> **开发中** — Courier 目前处于活跃开发阶段，功能持续迭代，尚未发布正式版本。
+> **暂停开发** — Courier 由于本人精力不足，暂停开发。
 
 Courier 是一个面向本地工作区的 Windows 桌面 AI 代码编辑器。应用使用 Flutter 和 Dart 实现文件编辑、AI 对话、任务队列与 Git 操作，不依赖 Go 运行时、Go 服务或外部动态库。
 
